@@ -1,0 +1,87 @@
+# ------------------------------------
+# Python Specific Files
+# ------------------------------------
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Environments (virtual environments)
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+/venv/
+/env/
+
+# Dependency Management (if you use these tools)
+# .pdm-python
+# poetry.lock (Uncomment to ignore lock file)
+# pdm.lock (Uncomment to ignore lock file)
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage
+.coverage
+.tox/
+.nox/
+htmlcov/
+
+# Editor/IDE Files (optional, but often helpful)
+.vscode/
+.idea/
+*.swp
+*~
+.ropeproject
+
+# ------------------------------------
+# Custom Output / Debug Files
+# ------------------------------------
+# Ignore all contents of debug_output folder, but allow the folder itself to be tracked 
+# if needed (or simply exist locally).
+debug_output/*
+
+# ------------------------------------
+# macOS Specific Files
+# ------------------------------------
+# General
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Thumbnails
+._*
+
+# Files that might appear in the root of a volume
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
