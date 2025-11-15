@@ -102,7 +102,6 @@ def preprocess_card_image(image_path, target_width=800, target_height=1120, debu
     # 3. Find the Largest, Card-like Contour
     contours = sorted(contours, key=cv2.contourArea, reverse=True)
     
-    # FIX: Define min_card_area before the loop
     min_card_area = (img.shape[0] * img.shape[1]) * 0.05 
     
     largest_card_contour = None
@@ -156,7 +155,9 @@ def preprocess_card_image(image_path, target_width=800, target_height=1120, debu
     # Construct the 4 points (box) based on forced aspect ratio
     rect_forced = (center, (ideal_width, ideal_height), angle)
     card_contour_for_warp = cv2.boxPoints(rect_forced)
-    card_contour_for_warp = np.int0(card_contour_for_warp) 
+    
+    # FIX 1: Replace np.int0 with np.int32
+    card_contour_for_warp = np.int32(card_contour_for_warp) 
 
     # --- Debugging: Draw the FORCED 7:5 contour (blue) ---
     if debug_output_folder:
@@ -172,6 +173,7 @@ def preprocess_card_image(image_path, target_width=800, target_height=1120, debu
 
     # 4. Perspective Transformation (Flattening)
     if scale_factor != 1.0:
+        # FIX 2: Replace np.int0 with np.int32
         card_contour_original_scale = (card_contour_for_warp / scale_factor).astype(np.int32)
         warped = four_point_transform(original_img, card_contour_original_scale.reshape(4, 2), target_width, target_height)
     else:
@@ -206,7 +208,6 @@ def identify_card_info(image_path, ocr_engine, debug_output_folder=None):
     """
     print(f"\n--- Processing Image: {os.path.basename(image_path)} ---")
     
-    # NOTE: debug_output_folder is correctly passed here
     img_for_ocr = preprocess_card_image(image_path, debug_output_folder=debug_output_folder) 
     
     if img_for_ocr is None:
@@ -276,7 +277,6 @@ if __name__ == "__main__":
 
     print("Initializing PaddleOCR (This may take a moment and download models the first time)...")
     try:
-        # Reverted to simplest initialization to avoid errors
         ocr = PaddleOCR(use_textline_orientation=True, lang='en', device='cpu') 
     except Exception as e:
         print(f"Error initializing PaddleOCR: {e}")
