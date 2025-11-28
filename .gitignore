@@ -85,3 +85,4 @@ debug_output/*
 .Trashes
 .VolumeIcon.icns
 .com.apple.timemachine.donotpresent
+/debug_output_webcam
