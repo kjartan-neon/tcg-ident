@@ -159,7 +159,7 @@ if __name__ == "__main__":
     
     print("Initializing PaddleOCR...")
     try:
-        ocr = PaddleOCR(use_textline_orientation=True, lang='en', device='cpu') 
+        ocr = PaddleOCR(use_textline_orientation=True, lang='en', device='cpu', use_mobile_model=True) 
     except Exception as e:
         print(f"Error initializing PaddleOCR: {e}")
         print("Check your PaddleOCR installation and dependencies.")

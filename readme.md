@@ -48,9 +48,10 @@ python3 get-set-full.py
 
 * python3 -m venv env
 * source env/bin/activate
-* pip install paddlepaddle
-* python3 -m pip install paddlepaddle-gpu==3.0.0b1 -i https://www.paddlepaddle.org.cn/packages/stable/cu123/
-* pip install "paddleocr>=2.8.1"
+* python3 -m pip install paddlepaddle==3.2.0 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
+* python3 -m pip install paddleocr
+* python3 -m pip install "paddleocr[all]"
+
 
 The error 
 --------------------------------------
