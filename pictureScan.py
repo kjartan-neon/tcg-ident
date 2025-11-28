@@ -277,7 +277,7 @@ if __name__ == "__main__":
 
     print("Initializing PaddleOCR (This may take a moment and download models the first time)...")
     try:
-        ocr = PaddleOCR(use_textline_orientation=True, lang='en', device='cpu', use_mobile_model=True) 
+        ocr = PaddleOCR(use_textline_orientation=True, lang='en', device='cpu', det_model_name='PP-OCRv5_mobile_det', rec_model_name='PP-OCRv5_mobile_rec') 
     except Exception as e:
         print(f"Error initializing PaddleOCR: {e}")
         print("Please check your PaddleOCR installation and its dependencies.")
