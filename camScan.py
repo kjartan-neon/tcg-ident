@@ -3,6 +3,7 @@ import numpy as np
 import os
 import sys
 import time
+from loguru import logger
 from paddleocr import PaddleOCR
 import pyfirmata
 import serial
