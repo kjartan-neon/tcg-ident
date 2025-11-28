@@ -165,49 +165,44 @@ if __name__ == "__main__":
         print("Check your PaddleOCR installation and dependencies.")
         sys.exit(1)
 
-    # --- 1. PyFirmata/Arduino Connection Attempt ---
-    board = None
-    arduino_available = False
-    try:
-        print(f"Attempting connection to Arduino on {PORT}...")
-        board = pyfirmata.Arduino(PORT)
-        board.digital[MOTOR_PIN].mode = pyfirmata.OUTPUT
-        print("✅ Arduino connection successful.")
-        arduino_available = True
-    except (serial.SerialException, pyfirmata.BoardNotFound, AttributeError) as e:
-        print(f"❌ Could not connect to Arduino on port {PORT}. Autonomous mode disabled.")
-        # We don't exit, we just disable autonomous mode
-    
-    # --- 2. Webcam Setup ---
+    # --- 1. Webcam Setup ---
     cap = cv2.VideoCapture(WEBCAM_INDEX)
     if not cap.isOpened():
         print(f"FATAL ERROR: Could not open webcam index {WEBCAM_INDEX}.")
-        if board: board.exit()
         sys.exit(1)
         
     cv2.namedWindow('TCG-ident Live', cv2.WINDOW_NORMAL)
     cv2.resizeWindow('TCG-ident Live', 800, 600)
     
-    # --- 3. Mode Selection ---
+    # --- 2. Mode Selection ---
     print("\n--- TCG-IDENT MODE SELECTION ---")
     
     valid_choice = False
+    autonomous_mode = False
     
     while not valid_choice:
-        if arduino_available:
-            choice = input("Select Mode: (A)utonomous via Arduino / (M)anual 'n' trigger: ").upper()
-            if choice == 'A':
-                autonomous_mode = True
-                valid_choice = True
-            elif choice == 'M':
-                autonomous_mode = False
-                valid_choice = True
-            else:
-                print("Invalid choice. Please enter 'A' or 'M'.")
-        else:
-            print("Arduino not available. Forcing Manual Mode.")
+        choice = input("Select Mode: (A)utonomous via Arduino / (M)anual 'n' trigger: ").upper()
+        if choice == 'A':
+            autonomous_mode = True
+            valid_choice = True
+        elif choice == 'M':
             autonomous_mode = False
             valid_choice = True
+        else:
+            print("Invalid choice. Please enter 'A' or 'M'.")
+
+    # --- 3. PyFirmata/Arduino Connection Attempt (only if needed) ---
+    board = None
+    if autonomous_mode:
+        try:
+            print(f"Attempting connection to Arduino on {PORT}...")
+            board = pyfirmata.Arduino(PORT)
+            board.digital[MOTOR_PIN].mode = pyfirmata.OUTPUT
+            print("✅ Arduino connection successful.")
+        except (serial.SerialException, pyfirmata.BoardNotFound, AttributeError) as e:
+            print(f"❌ Could not connect to Arduino on port {PORT}. Exiting.")
+            cap.release()
+            sys.exit(1)
 
     print(f"\nMode Selected: {'AUTONOMOUS' if autonomous_mode else 'MANUAL'}.")
     
