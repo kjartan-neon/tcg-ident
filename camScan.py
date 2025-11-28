@@ -4,11 +4,20 @@ import os
 import sys
 import time
 from paddleocr import PaddleOCR
+import pyfirmata
+import serial
 
 # --- Configuration ---
 DEBUG_OUTPUT_FOLDER = "debug_output_webcam"
-WEBCAM_INDEX = 0      # Usually 0 for the default camera
-WAIT_TIME_NO_CARD_DETECTED = 3.0 # Wait 3 seconds if no text is found
+WEBCAM_INDEX = 0          # Usually 0 for the default camera
+WAIT_TIME_NO_TEXT = 3.0   # Wait time if OCR fails
+
+# --- Arduino/PyFirmata Configuration ---
+# IMPORTANT: Change this to your Arduino's serial port (e.g., 'COM3', '/dev/ttyACM0')
+PORT = '/dev/ttyACM0' 
+MOTOR_PIN = 8 
+MOTOR_RUN_TIME = 0.5      # Seconds the motor runs to move the card
+SETTLE_TIME = 0.5         # Time to wait after motor stops for card vibration to settle
 
 # --- SIMPLE PREPROCESSING FUNCTION (UNCHANGED) ---
 
@@ -23,7 +32,7 @@ def preprocess_card_image_simple(img, debug_folder=None, filename_prefix="captur
     
     (h_orig, w_orig) = img.shape[:2]
     
-    # --- 1. Define Fixed Crop Area (Bottom-Left) ---
+    # --- 1. Define Fixed Crop Area (Bottom-Left: 50% H, 30% W) ---
     crop_height_perc = 0.50 
     crop_width_perc = 0.30  
     
@@ -44,7 +53,7 @@ def preprocess_card_image_simple(img, debug_folder=None, filename_prefix="captur
     return final_crop
 
 
-# --- OCR AND HEURISTIC FUNCTIONS (FIXED) ---
+# --- OCR AND HEURISTIC FUNCTIONS (UNCHANGED) ---
 
 def identify_card_info(img_for_ocr, ocr_engine):
     """
@@ -81,7 +90,6 @@ def identify_card_info(img_for_ocr, ocr_engine):
         text = str(text).upper().strip()
         
         # --- Heuristic 1: Look for potential Set IDs (Robust to "XXX EN") ---
-        # Look for text with letters and optionally space/language code
         if text.isalpha() or ' ' in text:
             parts = text.split()
             potential_set_id = ""
@@ -121,7 +129,31 @@ def identify_card_info(img_for_ocr, ocr_engine):
         # Include found parts in the failure message for better debugging
         return f"--- FAILED: OCR Heuristic (Set ID: {set_id}, Number: {card_number}) ---"
 
-# --- MAIN WEBCAM EXECUTION LOOP (UNCHANGED) ---
+# --- PYFIRMATA CONTROL FUNCTION (UNCHANGED) ---
+
+def run_card_feeder(board):
+    """Activates the motor pin for a set duration to feed the next card."""
+    print("Commanding Arduino: Feeding next card...")
+    
+    try:
+        # 1. Activate the motor (set pin HIGH)
+        board.digital[MOTOR_PIN].write(1)
+        
+        # 2. Let the motor run
+        time.sleep(MOTOR_RUN_TIME)
+        
+        # 3. Stop the motor (set pin LOW)
+        board.digital[MOTOR_PIN].write(0)
+        
+        # 4. Wait for the card vibration to stop before scanning
+        time.sleep(SETTLE_TIME) 
+        print("Card positioned. Ready for scan.")
+        return True
+    except Exception as e:
+        print(f"ERROR: Could not communicate with Arduino motor pin {MOTOR_PIN}: {e}")
+        return False
+
+# --- MAIN EXECUTION START ---
 
 if __name__ == "__main__":
     
@@ -133,93 +165,139 @@ if __name__ == "__main__":
         print("Check your PaddleOCR installation and dependencies.")
         sys.exit(1)
 
-    WEBCAM_INDEX = 0 
+    # --- 1. PyFirmata/Arduino Connection Attempt ---
+    board = None
+    arduino_available = False
+    try:
+        print(f"Attempting connection to Arduino on {PORT}...")
+        board = pyfirmata.Arduino(PORT)
+        board.digital[MOTOR_PIN].mode = pyfirmata.OUTPUT
+        print("✅ Arduino connection successful.")
+        arduino_available = True
+    except (serial.SerialException, pyfirmata.BoardNotFound, AttributeError) as e:
+        print(f"❌ Could not connect to Arduino on port {PORT}. Autonomous mode disabled.")
+        # We don't exit, we just disable autonomous mode
+    
+    # --- 2. Webcam Setup ---
     cap = cv2.VideoCapture(WEBCAM_INDEX)
     if not cap.isOpened():
-        print(f"Error: Could not open webcam index {WEBCAM_INDEX}.")
+        print(f"FATAL ERROR: Could not open webcam index {WEBCAM_INDEX}.")
+        if board: board.exit()
         sys.exit(1)
         
     cv2.namedWindow('TCG-ident Live', cv2.WINDOW_NORMAL)
     cv2.resizeWindow('TCG-ident Live', 800, 600)
+    
+    # --- 3. Mode Selection ---
+    print("\n--- TCG-IDENT MODE SELECTION ---")
+    
+    valid_choice = False
+    
+    while not valid_choice:
+        if arduino_available:
+            choice = input("Select Mode: (A)utonomous via Arduino / (M)anual 'n' trigger: ").upper()
+            if choice == 'A':
+                autonomous_mode = True
+                valid_choice = True
+            elif choice == 'M':
+                autonomous_mode = False
+                valid_choice = True
+            else:
+                print("Invalid choice. Please enter 'A' or 'M'.")
+        else:
+            print("Arduino not available. Forcing Manual Mode.")
+            autonomous_mode = False
+            valid_choice = True
 
-    print("\n--- TCG-IDENT LIVE MODE (FIXED CROP) ---")
-    print("Camera should be focused on the bottom-left area of the card.")
-    print(f"Processing ONLY the bottom 50% height and left 30% width of the frame.")
-    print("Press 'n' to scan the current frame.")
-    print("Press 'q' to quit.")
+    print(f"\nMode Selected: {'AUTONOMOUS' if autonomous_mode else 'MANUAL'}.")
     
     scan_count = 0
-    
+    should_feed_next_card = autonomous_mode # Start by feeding if in autonomous mode
+
     while True:
         ret, frame = cap.read()
         if not ret:
             print("Error: Failed to grab frame.")
             break
         
-        # Display live feed
-        cv2.putText(frame, "PRESS 'n' TO SCAN", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+        # --- Display Live Feed Status ---
+        mode_text = "AUTONOMOUS (Press 'q' to quit)" if autonomous_mode else "MANUAL (Press 'n' to scan, 'q' to quit)"
+        cv2.putText(frame, mode_text, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
         cv2.imshow('TCG-ident Live', frame)
 
         key = cv2.waitKey(1) & 0xFF
         
-        # 1. Quit check
         if key == ord('q'):
             break
+        
+        trigger_scan = False
+        
+        # --- Manual Trigger Check ---
+        if not autonomous_mode and key == ord('n'):
+            trigger_scan = True
 
-        # 2. Manual trigger check ('n')
-        if key == ord('n'):
-            print("\nSCAN TRIGGERED (Key 'n' pressed)...")
+        # --- Autonomous Trigger Check ---
+        if autonomous_mode:
+            
+            # 1. Feed the card if needed
+            if should_feed_next_card:
+                if not run_card_feeder(board):
+                    print("Exiting due to feeder error.")
+                    break
+                should_feed_next_card = False # Card is now in position
+                time.sleep(0.1) 
+                
+                # Grab a fresh frame after the card has settled
+                ret, frame = cap.read()
+                if not ret:
+                    print("Error: Failed to grab frame after feed.")
+                    break
+            
+            # If we just fed the card, trigger the scan on the new frame
+            trigger_scan = True 
+
+        # --- SCAN EXECUTION ---
+        if trigger_scan:
+            print(f"\nSCAN TRIGGERED ({'Auto' if autonomous_mode else 'Manual'})...")
             
             filename_prefix = f"scan_{scan_count:03d}_{int(time.time())}" 
-            
-            # --- RUN SIMPLE CROP ---
             img_for_ocr = preprocess_card_image_simple(frame, debug_folder=DEBUG_OUTPUT_FOLDER, filename_prefix=filename_prefix)
             
-            # Since we always get a crop, we assume the input is good and run OCR
-            result = identify_card_info(img_for_ocr, ocr)
+            # CRITICAL FIX: Create a deep copy to prevent Segmentation Fault
+            if img_for_ocr is not None:
+                img_for_ocr_safe = img_for_ocr.copy() 
+            else:
+                img_for_ocr_safe = None
+                
+            result = identify_card_info(img_for_ocr_safe, ocr)
             
             if "FAILED" not in result:
                 # --- SUCCESS ---
                 print(f"✅ IDENTIFIED: {result}")
                 
-                # Show result on the live frame
+                # Show result briefly on the live frame
                 cv2.putText(frame, result, (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3)
                 cv2.imshow('TCG-ident Live', frame)
-
-                # Show the cropped area to confirm the OCR input
-                cv2.imshow('OCR Input Crop', img_for_ocr)
+                cv2.waitKey(100) # Show result briefly
                 
-                # Wait for user to review before continuing
-                cv2.waitKey(0) 
-                cv2.destroyWindow('OCR Input Crop')
-
                 scan_count += 1
+                
+                if autonomous_mode:
+                    should_feed_next_card = True # Ready to feed the next one
                 
             else:
                 # --- FAILURE ---
-                print(f"❌ SCAN FAILED: {result}. Waiting {WAIT_TIME_NO_CARD_DETECTED}s and retrying...")
+                print(f"❌ SCAN FAILED: {result}.")
                 
-                start_time = time.time()
-                while (time.time() - start_time) < WAIT_TIME_NO_CARD_DETECTED:
-                    
-                    ret_auto, frame_auto = cap.read()
-                    if not ret_auto:
-                        break
-
-                    countdown = int(WAIT_TIME_NO_CARD_DETECTED - (time.time() - start_time)) + 1
-                    status_text = f"OCR FAILED! Retrying in {countdown}s..."
-                    
-                    frame_display = frame_auto.copy()
-                    cv2.putText(frame_display, status_text, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-                    cv2.imshow('TCG-ident Live', frame_display)
-                    
-                    key_inner = cv2.waitKey(50) & 0xFF
-                    if key_inner == ord('q'):
-                        key = ord('q') 
-                        break
+                if autonomous_mode:
+                    print("Retrying scan on the SAME card after 1 second.")
+                    time.sleep(1)
+                else:
+                    # In manual mode, wait for the user to press 'n' again
+                    pass
                 
-                if key == ord('q'):
-                    break
-                
+    # --- Cleanup ---
     cap.release()
     cv2.destroyAllWindows()
+    if board:
+        board.exit()
