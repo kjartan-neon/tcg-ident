@@ -282,7 +282,7 @@ if __name__ == "__main__":
         # Please run: pip uninstall -y paddleocr paddlepaddle
         # Then:      pip install --no-cache-dir paddleocr paddlepaddle
         # This uses the latest recommended arguments for CPU processing.
-        ocr = PaddleOCR(use_angle_cls=True, lang='en', use_gpu=False)
+        ocr = PaddleOCR(use_textline_orientation=True, lang='en')
     except Exception as e:
         print(f"Error initializing PaddleOCR: {e}")
         print("Please check your PaddleOCR installation and its dependencies.")
