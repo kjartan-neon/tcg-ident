@@ -205,6 +205,20 @@ if __name__ == "__main__":
         else:
             print("Invalid choice. Please enter 'A' or 'M'.")
 
+    # --- 2b. Preprocessing Selection ---
+    valid_choice = False
+    use_preprocessing = True
+    while not valid_choice:
+        choice = input("Enable image preprocessing & cropping? (Y/N): ").upper()
+        if choice == 'Y':
+            use_preprocessing = True
+            valid_choice = True
+        elif choice == 'N':
+            use_preprocessing = False
+            valid_choice = True
+        else:
+            print("Invalid choice. Please enter 'Y' or 'N'.")
+
     # --- 3. PyFirmata/Arduino Connection Attempt (only if needed) ---
     board = None
     if autonomous_mode:
@@ -218,7 +232,7 @@ if __name__ == "__main__":
             cap.release()
             sys.exit(1)
 
-    print(f"\nMode Selected: {'AUTONOMOUS' if autonomous_mode else 'MANUAL'}.")
+    print(f"\nMode: {'AUTONOMOUS' if autonomous_mode else 'MANUAL'} | Preprocessing: {'ON' if use_preprocessing else 'OFF'}")
     
     scan_count = 0
     should_feed_next_card = autonomous_mode # Start by feeding if in autonomous mode
@@ -270,7 +284,18 @@ if __name__ == "__main__":
             print(f"\nSCAN TRIGGERED ({'Auto' if autonomous_mode else 'Manual'})...")
             
             filename_prefix = f"scan_{scan_count:03d}_{int(time.time())}" 
-            img_for_ocr = preprocess_card_image_simple(frame, debug_folder=DEBUG_OUTPUT_FOLDER, filename_prefix=filename_prefix)
+            
+            if use_preprocessing:
+                print("Preprocessing and cropping image...")
+                img_for_ocr = preprocess_card_image_simple(frame, debug_folder=DEBUG_OUTPUT_FOLDER, filename_prefix=filename_prefix)
+            else:
+                print("Using raw camera frame for OCR...")
+                # If not preprocessing, use the whole frame.
+                if DEBUG_OUTPUT_FOLDER and not os.path.exists(DEBUG_OUTPUT_FOLDER):
+                    os.makedirs(DEBUG_OUTPUT_FOLDER)
+                debug_raw_frame_filename = os.path.join(DEBUG_OUTPUT_FOLDER, f"{filename_prefix}_raw_frame.jpg")
+                cv2.imwrite(debug_raw_frame_filename, frame)
+                img_for_ocr = frame # Use the raw color frame
             
             # CRITICAL FIX: Create a deep copy to prevent Segmentation Fault
             if img_for_ocr is not None:
