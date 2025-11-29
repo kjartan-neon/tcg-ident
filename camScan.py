@@ -23,12 +23,22 @@ SETTLE_TIME = 0.5         # Time to wait after motor stops for card vibration to
 
 def preprocess_card_image_simple(img, debug_folder=None, filename_prefix="capture"):
     """
-    Performs a fixed crop (bottom 50% height, left 30% width) directly on the frame.
-    No contour detection or perspective correction is performed.
+    Performs preprocessing and a fixed crop on the frame.
+    Steps:
+    1. Convert to Grayscale.
+    2. Apply Adaptive Thresholding to create a high-contrast binary image.
+    3. Perform a fixed crop (bottom 50% height, left 30% width).
     Returns the final cropped image for OCR.
     """
     if img is None:
         return None
+        
+    # --- 1. Convert to Grayscale ---
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    
+    # --- 2. Apply Adaptive Thresholding ---
+    # This helps with uneven lighting and makes text stand out.
+    binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
     
     (h_orig, w_orig) = img.shape[:2]
     
@@ -40,7 +50,7 @@ def preprocess_card_image_simple(img, debug_folder=None, filename_prefix="captur
     x_start_crop = 0 
     x_end_crop = int(w_orig * crop_width_perc)
     
-    final_crop = img[y_start_crop:h_orig, x_start_crop:x_end_crop]
+    final_crop = binary[y_start_crop:h_orig, x_start_crop:x_end_crop]
 
     # --- Debugging: Save the final processed image (OCR Input) ---
     if debug_folder:
@@ -165,6 +175,15 @@ if __name__ == "__main__":
     if not cap.isOpened():
         print(f"FATAL ERROR: Could not open webcam index {WEBCAM_INDEX}.")
         sys.exit(1)
+    
+    # --- Set higher resolution ---
+    desired_width = 1920
+    desired_height = 1080
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, desired_width)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, desired_height)
+    
+    # --- Verify the resolution that was actually set ---
+    print(f"Webcam resolution set to: {int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
         
     cv2.namedWindow('TCG-ident Live', cv2.WINDOW_NORMAL)
     cv2.resizeWindow('TCG-ident Live', 800, 600)
