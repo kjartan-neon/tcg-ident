@@ -3,8 +3,8 @@ import numpy as np
 import os
 import sys
 import time
-from paddleocr import PaddleOCR
 import pyfirmata
+import easyocr
 import serial
 
 # --- Configuration ---
@@ -63,24 +63,19 @@ def identify_card_info(img_for_ocr, ocr_engine):
     if img_for_ocr is None:
         return "--- FAILED: No Crop Input ---"
 
-    result = ocr_engine.predict(img_for_ocr)
+    # EasyOCR returns a list of (bbox, text, confidence)
+    result = ocr_engine.readtext(img_for_ocr)
 
     set_id = None
     card_number = None
     detected_texts = []
 
-    if result and isinstance(result, list) and len(result) > 0:
-        ocr_result_object = result[0]
-        if hasattr(ocr_result_object, 'rec_texts'):
-            detected_texts = ocr_result_object.rec_texts
-        elif isinstance(ocr_result_object, dict) and 'rec_texts' in ocr_result_object:
-            detected_texts = ocr_result_object['rec_texts']
-    
     # --- DEBUG: Output all found text ---
     print("\n--- DEBUG: Raw OCR Text Output ---")
-    if detected_texts:
-        for text in detected_texts:
-            print(f"[RAW OCR]: {text}")
+    if result:
+        for (bbox, text, prob) in result:
+            print(f"[RAW OCR]: {text} (Confidence: {prob:.2f})")
+            detected_texts.append(text)
     else:
         print("[RAW OCR]: No text detected.")
     print("---------------------------------")
@@ -157,12 +152,12 @@ def run_card_feeder(board):
 
 if __name__ == "__main__":
     
-    print("Initializing PaddleOCR...")
+    print("Initializing EasyOCR...")
     try:
-        ocr = PaddleOCR(use_textline_orientation=True, lang='en', device='cpu', det_model_name='PP-OCRv5_mobile_det', rec_model_name='PP-OCRv5_mobile_rec') 
+        ocr = easyocr.Reader(['en'], gpu=False) # Set gpu=True if you have a supported GPU and CUDA installed
     except Exception as e:
-        print(f"Error initializing PaddleOCR: {e}")
-        print("Check your PaddleOCR installation and dependencies.")
+        print(f"Error initializing EasyOCR: {e}")
+        print("Check your EasyOCR installation and dependencies (PyTorch, etc.).")
         sys.exit(1)
 
     # --- 1. Webcam Setup ---
