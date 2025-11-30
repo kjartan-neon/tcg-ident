@@ -3,8 +3,8 @@ import numpy as np
 import os
 import sys
 import time
+from paddleocr import PaddleOCR
 import pyfirmata
-import easyocr
 import serial
 
 # --- Configuration ---
@@ -23,22 +23,12 @@ SETTLE_TIME = 0.5         # Time to wait after motor stops for card vibration to
 
 def preprocess_card_image_simple(img, debug_folder=None, filename_prefix="capture"):
     """
-    Performs preprocessing and a fixed crop on the frame.
-    Steps:
-    1. Convert to Grayscale.
-    2. Apply Adaptive Thresholding to create a high-contrast binary image.
-    3. Perform a fixed crop (bottom 50% height, left 30% width).
+    Performs a fixed crop (bottom 50% height, left 30% width) directly on the frame.
+    No contour detection or perspective correction is performed.
     Returns the final cropped image for OCR.
     """
     if img is None:
         return None
-        
-    # --- 1. Convert to Grayscale ---
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    
-    # --- 2. Apply Adaptive Thresholding ---
-    # This helps with uneven lighting and makes text stand out.
-    binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
     
     (h_orig, w_orig) = img.shape[:2]
     
@@ -50,7 +40,7 @@ def preprocess_card_image_simple(img, debug_folder=None, filename_prefix="captur
     x_start_crop = 0 
     x_end_crop = int(w_orig * crop_width_perc)
     
-    final_crop = binary[y_start_crop:h_orig, x_start_crop:x_end_crop]
+    final_crop = img[y_start_crop:h_orig, x_start_crop:x_end_crop]
 
     # --- Debugging: Save the final processed image (OCR Input) ---
     if debug_folder:
@@ -73,19 +63,24 @@ def identify_card_info(img_for_ocr, ocr_engine):
     if img_for_ocr is None:
         return "--- FAILED: No Crop Input ---"
 
-    # EasyOCR returns a list of (bbox, text, confidence)
-    result = ocr_engine.readtext(img_for_ocr)
+    result = ocr_engine.predict(img_for_ocr)
 
     set_id = None
     card_number = None
     detected_texts = []
 
+    if result and isinstance(result, list) and len(result) > 0:
+        ocr_result_object = result[0]
+        if hasattr(ocr_result_object, 'rec_texts'):
+            detected_texts = ocr_result_object.rec_texts
+        elif isinstance(ocr_result_object, dict) and 'rec_texts' in ocr_result_object:
+            detected_texts = ocr_result_object['rec_texts']
+    
     # --- DEBUG: Output all found text ---
     print("\n--- DEBUG: Raw OCR Text Output ---")
-    if result:
-        for (bbox, text, prob) in result:
-            print(f"[RAW OCR]: {text} (Confidence: {prob:.2f})")
-            detected_texts.append(text)
+    if detected_texts:
+        for text in detected_texts:
+            print(f"[RAW OCR]: {text}")
     else:
         print("[RAW OCR]: No text detected.")
     print("---------------------------------")
@@ -162,12 +157,12 @@ def run_card_feeder(board):
 
 if __name__ == "__main__":
     
-    print("Initializing EasyOCR...")
+    print("Initializing PaddleOCR...")
     try:
-        ocr = easyocr.Reader(['en'], gpu=False) # Set gpu=True if you have a supported GPU and CUDA installed
+        ocr = PaddleOCR(use_textline_orientation=True, lang='en', device='cpu', det_model_name='PP-OCRv5_mobile_det', rec_model_name='PP-OCRv5_mobile_rec') 
     except Exception as e:
-        print(f"Error initializing EasyOCR: {e}")
-        print("Check your EasyOCR installation and dependencies (PyTorch, etc.).")
+        print(f"Error initializing PaddleOCR: {e}")
+        print("Check your PaddleOCR installation and dependencies.")
         sys.exit(1)
 
     # --- 1. Webcam Setup ---
@@ -175,15 +170,6 @@ if __name__ == "__main__":
     if not cap.isOpened():
         print(f"FATAL ERROR: Could not open webcam index {WEBCAM_INDEX}.")
         sys.exit(1)
-    
-    # --- Set higher resolution ---
-    desired_width = 1920
-    desired_height = 1080
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, desired_width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, desired_height)
-    
-    # --- Verify the resolution that was actually set ---
-    print(f"Webcam resolution set to: {int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
         
     cv2.namedWindow('TCG-ident Live', cv2.WINDOW_NORMAL)
     cv2.resizeWindow('TCG-ident Live', 800, 600)
@@ -205,20 +191,6 @@ if __name__ == "__main__":
         else:
             print("Invalid choice. Please enter 'A' or 'M'.")
 
-    # --- 2b. Preprocessing Selection ---
-    valid_choice = False
-    use_preprocessing = True
-    while not valid_choice:
-        choice = input("Enable image preprocessing & cropping? (Y/N): ").upper()
-        if choice == 'Y':
-            use_preprocessing = True
-            valid_choice = True
-        elif choice == 'N':
-            use_preprocessing = False
-            valid_choice = True
-        else:
-            print("Invalid choice. Please enter 'Y' or 'N'.")
-
     # --- 3. PyFirmata/Arduino Connection Attempt (only if needed) ---
     board = None
     if autonomous_mode:
@@ -232,7 +204,7 @@ if __name__ == "__main__":
             cap.release()
             sys.exit(1)
 
-    print(f"\nMode: {'AUTONOMOUS' if autonomous_mode else 'MANUAL'} | Preprocessing: {'ON' if use_preprocessing else 'OFF'}")
+    print(f"\nMode Selected: {'AUTONOMOUS' if autonomous_mode else 'MANUAL'}.")
     
     scan_count = 0
     should_feed_next_card = autonomous_mode # Start by feeding if in autonomous mode
@@ -284,18 +256,7 @@ if __name__ == "__main__":
             print(f"\nSCAN TRIGGERED ({'Auto' if autonomous_mode else 'Manual'})...")
             
             filename_prefix = f"scan_{scan_count:03d}_{int(time.time())}" 
-            
-            if use_preprocessing:
-                print("Preprocessing and cropping image...")
-                img_for_ocr = preprocess_card_image_simple(frame, debug_folder=DEBUG_OUTPUT_FOLDER, filename_prefix=filename_prefix)
-            else:
-                print("Using raw camera frame for OCR...")
-                # If not preprocessing, use the whole frame.
-                if DEBUG_OUTPUT_FOLDER and not os.path.exists(DEBUG_OUTPUT_FOLDER):
-                    os.makedirs(DEBUG_OUTPUT_FOLDER)
-                debug_raw_frame_filename = os.path.join(DEBUG_OUTPUT_FOLDER, f"{filename_prefix}_raw_frame.jpg")
-                cv2.imwrite(debug_raw_frame_filename, frame)
-                img_for_ocr = frame # Use the raw color frame
+            img_for_ocr = preprocess_card_image_simple(frame, debug_folder=DEBUG_OUTPUT_FOLDER, filename_prefix=filename_prefix)
             
             # CRITICAL FIX: Create a deep copy to prevent Segmentation Fault
             if img_for_ocr is not None:

@@ -46,20 +46,16 @@ python3 get-set-full.py
 
 ### 3. Raspberry pi 5
 
+You can try, but it is way to slow on a Rasperry pi to be useful. I tried this:
+
 * sudo apt-get install -y cmake wget git build-essential libopencv-dev python3-opencv
 * git clone --depth=1 https://github.com/PaddlePaddle/Paddle-Lite.git
 * cd Paddle-Lite
-
-Compile:
-
-./lite/tools/build_linux.sh \
-    --arch=armv8 \
-    --with_python=ON \
-    --with_extra=ON \
-    --with_cv=ON \
-    --with_static_lib=ON \
-    build_python
-
+* git fetch --tags
+* git checkout -b lite-v2.12-build v2.12
+* rm -rf build_py
+* mkdir build_py
+* cd build_py
 
 The error 
 --------------------------------------
