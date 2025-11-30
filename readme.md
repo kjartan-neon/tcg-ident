@@ -43,6 +43,7 @@ Execute the script from your terminal:
 
 ```bash
 python3 get-set-full.py
+```
 
 ### 3. Raspberry pi 5
 
@@ -57,18 +58,4 @@ You can try, but it is way to slow on a Rasperry pi to be useful. I tried this:
 * mkdir build_py
 * cd build_py
 
-The error 
---------------------------------------
-C++ Traceback (most recent call last):
---------------------------------------
-No stack trace in paddle, may be caused by external reasons.
-
-----------------------
-Error Message Summary:
-----------------------
-FatalError: `Segmentation fault` is detected by the operating system.
-  [TimeInfo: *** Aborted at 1764325698 (unix time) try "date -d @1764325698" if you are using GNU date ***]
-  [SignalInfo: *** SIGSEGV (@0x0) received by PID 21710 (TID 0x7fff359ff160) from PID 0 ***]
-
-Segmentation fault
 
