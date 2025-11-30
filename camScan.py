@@ -4,7 +4,7 @@ import os
 import sys
 import time
 from paddleocr import PaddleOCR
-import pyfirmata
+import pyfirmata2 as pyfirmata
 import serial
 
 # --- Configuration ---
@@ -14,9 +14,10 @@ WAIT_TIME_NO_TEXT = 3.0   # Wait time if OCR fails
 
 # --- Arduino/PyFirmata Configuration ---
 # IMPORTANT: Change this to your Arduino's serial port (e.g., 'COM3', '/dev/ttyACM0')
-PORT = '/dev/ttyACM0' 
+# MUST USE pip install pyfirmata2 on newer pythons
+PORT = '/dev/cu.usbserial-1130' 
 MOTOR_PIN = 8 
-MOTOR_RUN_TIME = 0.5      # Seconds the motor runs to move the card
+MOTOR_RUN_TIME = 0.2      # Seconds the motor runs to move the card
 SETTLE_TIME = 0.5         # Time to wait after motor stops for card vibration to settle
 
 # --- SIMPLE PREPROCESSING FUNCTION (UNCHANGED) ---
@@ -95,7 +96,7 @@ def identify_card_info(img_for_ocr, ocr_engine):
             potential_set_id = ""
 
             # Case: TWM EN
-            if len(parts) >= 2 and parts[-1] in ['EN', 'FR', 'JP', 'DE', 'IT', 'POL']: 
+            if len(parts) >= 2 and parts[-1] in ['EN', 'FR', 'JP', 'DE', 'IT']: 
                 potential_set_id = parts[0]
             # Case: TWM (only letters)
             elif len(parts) == 1 and 2 <= len(parts[0]) <= 5 and parts[0].isalpha(): 
@@ -136,13 +137,13 @@ def run_card_feeder(board):
     print("Commanding Arduino: Feeding next card...")
     
     try:
-        # 1. Activate the motor (set pin HIGH)
+        # 1. Activate the motor (set pin high)
         board.digital[MOTOR_PIN].write(1)
         
         # 2. Let the motor run
         time.sleep(MOTOR_RUN_TIME)
         
-        # 3. Stop the motor (set pin LOW)
+        # 3. Stop the motor (set pin low)
         board.digital[MOTOR_PIN].write(0)
         
         # 4. Wait for the card vibration to stop before scanning
@@ -159,7 +160,7 @@ if __name__ == "__main__":
     
     print("Initializing PaddleOCR...")
     try:
-        ocr = PaddleOCR(use_textline_orientation=True, lang='en', device='cpu', det_model_name='PP-OCRv5_mobile_det', rec_model_name='PP-OCRv5_mobile_rec') 
+        ocr = PaddleOCR(use_textline_orientation=True, lang='en') 
     except Exception as e:
         print(f"Error initializing PaddleOCR: {e}")
         print("Check your PaddleOCR installation and dependencies.")
@@ -196,10 +197,11 @@ if __name__ == "__main__":
     if autonomous_mode:
         try:
             print(f"Attempting connection to Arduino on {PORT}...")
-            board = pyfirmata.Arduino(PORT)
-            board.digital[MOTOR_PIN].mode = pyfirmata.OUTPUT
+            board = pyfirmata.Arduino(PORT) # This will now use pyfirmata2
+            board.digital[MOTOR_PIN].mode = pyfirmata.OUTPUT # This will also use pyfirmata2
+            board.digital[MOTOR_PIN].write(0) # set board low
             print("✅ Arduino connection successful.")
-        except (serial.SerialException, pyfirmata.BoardNotFound, AttributeError) as e:
+        except serial.SerialException as e:
             print(f"❌ Could not connect to Arduino on port {PORT}. Exiting.")
             cap.release()
             sys.exit(1)
