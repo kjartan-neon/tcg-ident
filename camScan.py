@@ -15,7 +15,7 @@ WAIT_TIME_NO_TEXT = 3.0   # Wait time if OCR fails
 # --- Arduino/PyFirmata Configuration ---
 # IMPORTANT: Change this to your Arduino's serial port (e.g., 'COM3', '/dev/ttyACM0')
 # MUST USE pip install pyfirmata2 on newer pythons
-PORT = '/dev/cu.usbserial-1130' 
+PORT = '/dev/cu.usbserial-120' 
 MOTOR_PIN = 8 
 MOTOR_RUN_TIME = 0.2      # Seconds the motor runs to move the card
 SETTLE_TIME = 0.5         # Time to wait after motor stops for card vibration to settle
@@ -154,6 +154,46 @@ def run_card_feeder(board):
         print(f"ERROR: Could not communicate with Arduino motor pin {MOTOR_PIN}: {e}")
         return False
 
+# --- OFFLINE PROCESSING FUNCTION ---
+
+def process_images_from_folder(folder_path, ocr_engine):
+    """
+    Processes all images from a specified folder instead of using the webcam.
+    """
+    print(f"\n--- STARTING OFFLINE PROCESSING ---")
+    print(f"Source Folder: {folder_path}")
+
+    if not os.path.exists(folder_path) or not os.path.isdir(folder_path):
+        print(f"❌ ERROR: Folder not found or is not a directory: {folder_path}")
+        return
+
+    image_files = sorted([f for f in os.listdir(folder_path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))])
+
+    if not image_files:
+        print("❌ No images found in the folder to process.")
+        return
+
+    total_images = len(image_files)
+    print(f"Found {total_images} images to process.")
+
+    for i, filename in enumerate(image_files):
+        image_path = os.path.join(folder_path, filename)
+        print(f"\n--- Processing image {i+1}/{total_images}: {filename} ---")
+        
+        frame = cv2.imread(image_path)
+        if frame is None:
+            print(f"⚠️  Could not read image: {filename}")
+            continue
+
+        # Use a prefix based on the original filename for debug outputs
+        filename_prefix = os.path.splitext(filename)[0]
+        
+        img_for_ocr = preprocess_card_image_simple(frame, debug_folder=DEBUG_OUTPUT_FOLDER, filename_prefix=f"{filename_prefix}_offline")
+        
+        result = identify_card_info(img_for_ocr, ocr_engine)
+        print(f"➡️  Result for {filename}: {result}")
+
+    print("\n--- OFFLINE PROCESSING COMPLETE ---")
 # --- MAIN EXECUTION START ---
 
 if __name__ == "__main__":
@@ -165,6 +205,27 @@ if __name__ == "__main__":
         print(f"Error initializing PaddleOCR: {e}")
         print("Check your PaddleOCR installation and dependencies.")
         sys.exit(1)
+
+    # --- 0. Ensure debug folder exists ---
+    if not os.path.exists(DEBUG_OUTPUT_FOLDER):
+        os.makedirs(DEBUG_OUTPUT_FOLDER)
+        print(f"Created debug output folder: {DEBUG_OUTPUT_FOLDER}")
+
+    # --- NEW: Ask for offline processing mode ---
+    process_offline = False
+    while True:
+        offline_choice = input("Process images from folder instead of webcam? (y/n): ").lower()
+        if offline_choice == 'y':
+            process_offline = True
+            break
+        elif offline_choice == 'n':
+            break
+        else:
+            print("Invalid choice. Please enter 'y' or 'n'.")
+
+    if process_offline:
+        process_images_from_folder(DEBUG_OUTPUT_FOLDER, ocr)
+        sys.exit(0)
 
     # --- 1. Webcam Setup ---
     cap = cv2.VideoCapture(WEBCAM_INDEX)
@@ -210,12 +271,19 @@ if __name__ == "__main__":
     
     scan_count = 0
     should_feed_next_card = autonomous_mode # Start by feeding if in autonomous mode
+    frame_save_counter = 0
 
     while True:
         ret, frame = cap.read()
         if not ret:
             print("Error: Failed to grab frame.")
             break
+
+        # --- FEATURE: Save every full frame for debugging ---
+        frame_save_path = os.path.join(DEBUG_OUTPUT_FOLDER, f"webcam_frame_{frame_save_counter:05d}.jpg")
+        cv2.imwrite(frame_save_path, frame)
+        frame_save_counter += 1
+        # ---
         
         # --- Display Live Feed Status ---
         mode_text = "AUTONOMOUS (Press 'q' to quit)" if autonomous_mode else "MANUAL (Press 'n' to scan, 'q' to quit)"
