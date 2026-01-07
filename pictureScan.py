@@ -3,7 +3,9 @@ import numpy as np
 import os
 import glob
 import sys
+import json
 from paddleocr import PaddleOCR
+from ocr_processing import extract_card_info_from_text
 
 # --- Configuration ---
 CARD_FOLDER = "photos" 
@@ -202,24 +204,17 @@ def preprocess_card_image(image_path, target_width=800, target_height=1120, debu
 
 # --- OCR and Heuristic Functions (unchanged) ---
 
-def identify_card_info(image_path, ocr_engine, debug_output_folder=None):
+def identify_card_info(img_for_ocr, ocr_engine, card_database=None):
     """
-    Full pipeline: Preprocess -> OCR -> Heuristic Extraction.
+    Runs OCR and heuristic extraction on a given image.
     """
-    print(f"\n--- Processing Image: {os.path.basename(image_path)} ---")
-    
-    img_for_ocr = preprocess_card_image(image_path, debug_output_folder=debug_output_folder) 
-    
     if img_for_ocr is None:
-        print("Pre-processing failed. Skipping OCR.")
+        print("Cannot process a null image. Skipping OCR.")
         return None
 
     result = ocr_engine.predict(img_for_ocr)
 
-    set_id = None
-    card_number = None
     detected_texts = []
-
     if result and isinstance(result, list) and len(result) > 0:
         ocr_result_object = result[0]
         
@@ -227,53 +222,51 @@ def identify_card_info(image_path, ocr_engine, debug_output_folder=None):
             detected_texts = ocr_result_object.rec_texts
         elif isinstance(ocr_result_object, dict) and 'rec_texts' in ocr_result_object:
             detected_texts = ocr_result_object['rec_texts']
-
-    print("--- DEBUG: All Detected Text Strings ---")
-    if detected_texts:
-        for text in detected_texts:
-            print(f"[RAW]: {text}")
-    else:
-        print("[RAW]: No text detected by the OCR model.")
-    print("-----------------------------------------")
-    
-    for text in detected_texts:
-        text = str(text).upper().strip()
-        
-        # Heuristic 1: Look for potential set IDs
-        if text.isalpha() and len(text) >= 2 and len(text) <= 5:
-            if text.endswith('EN'):
-                text = text[:-2] 
             
-            if text.isalpha() and len(text) >= 2 and text not in ['EN', 'FR', 'JP', 'DE', 'IT', 'POL']: 
-                set_id = text
-        
-        # Heuristic 2: Look for potential card numbers
-        number_part = None
-        if '/' in text:
-            parts = text.split('/')
-            number_part = parts[0]
-        elif text.isdigit() and len(text) <= 4:
-            number_part = text
-        
-        if number_part is not None and number_part.isdigit():
-            card_number = number_part
+    # Use the shared function for text processing
+    info = extract_card_info_from_text(detected_texts, card_database)
 
-    if set_id and card_number:
-        formatted_info = f"{set_id}-{card_number}"
-        return formatted_info
-    else:
-        print(f"Final Extraction Failed: Set ID found: {set_id}, Card Number found: {card_number}")
+    if "FAILED" in info:
+        print(f"Final Extraction Failed: {info}")
         return None
+    else:
+        return info
 
 # --- Main execution ---
 if __name__ == "__main__":
     
+    # --- Get Card Folder ---
+    use_default = input(f"Do you want to use the default folder '{CARD_FOLDER}'? (Y/n): ").lower().strip()
+    if use_default == 'n':
+        custom_folder = input("Please enter the path to the folder with your card images: ").strip()
+        if os.path.isdir(custom_folder):
+            CARD_FOLDER = custom_folder
+        else:
+            print(f"Error: The folder '{custom_folder}' was not found. Using default folder '{CARD_FOLDER}'.")
+
     DEBUG_OUTPUT_FOLDER = "debug_output" 
     
     if not os.path.isdir(CARD_FOLDER):
         print(f"Error: The folder '{CARD_FOLDER}' was not found.")
-        print("Please create a folder named 'photos' in the same directory as this script.")
+        print("Please create a folder named 'photos' in the same directory as this script, or provide a valid path.")
         sys.exit(1)
+
+    # --- Load Card Database ---
+    card_database = None
+    try:
+        with open('card_data_lookup.json', 'r') as f:
+            card_database = json.load(f)
+        print("Successfully loaded card database.")
+    except FileNotFoundError:
+        print("Warning: 'card_data_lookup.json' not found. Card names will not be looked up.")
+    except json.JSONDecodeError:
+        print("Error: Could not decode 'card_data_lookup.json'. File might be corrupted.")
+        card_database = None # Ensure it's None if loading fails
+
+    # --- NEW: Ask for cropping mode ---
+    cropping_mode = ''
+    while cropping_mode not in ['c', 'f']:
+        cropping_mode = input("Do you want to use automatic cropping (c) of images or OCR full images (f)? ").lower()
 
     print("Initializing PaddleOCR (This may take a moment and download models the first time)...")
     try:
@@ -301,10 +294,26 @@ if __name__ == "__main__":
     results = {}
     
     for path in image_paths:
-        info = identify_card_info(path, ocr, debug_output_folder=DEBUG_OUTPUT_FOLDER)
+        print(f"\n--- Processing Image: {os.path.basename(path)} ---")
+        
+        img_to_process = None
+        if cropping_mode == 'c':
+            img_to_process = preprocess_card_image(path, debug_output_folder=DEBUG_OUTPUT_FOLDER)
+        else: # mode == 'f'
+            img_to_process = cv2.imread(path)
+
+        if img_to_process is None:
+            print(f"❌ FAILED to read or process image.")
+            results[os.path.basename(path)] = "--- FAILED (Preprocessing/Read) ---"
+            continue
+            
+        info = identify_card_info(img_to_process, ocr, card_database)
+
         if info:
+            print(f"✅ IDENTIFIED: {info}")
             results[os.path.basename(path)] = info
         else:
+            print(f"❌ IDENTIFICATION FAILED.")
             results[os.path.basename(path)] = "--- FAILED ---"
 
     print("\n" + "="*40)

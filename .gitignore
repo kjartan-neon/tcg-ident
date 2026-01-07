@@ -87,3 +87,5 @@ debug_output/*
 .com.apple.timemachine.donotpresent
 /debug_output_webcam
 paddlepaddle-2.4.2-cp39-cp39-linux_aarch64.whl
+/tcgdex/data
+card_data_lookup.json

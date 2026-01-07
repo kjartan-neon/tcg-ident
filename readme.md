@@ -1,61 +1,95 @@
-# 🃏 tcg-ident: Trading Card Identifier
+# 🃏 TCG Identifier
 
-**tcg-ident** is a Python script designed to automatically detect, crop, flatten, and identify the Set ID and Card Number from physical Trading Card Game (TCG) cards using computer vision and Optical Character Recognition (OCR). It is specifically optimized to handle common issues like perspective distortion and low-contrast borders (e.g., trainer cards) by leveraging a forced 7:5 aspect ratio and aggressive contour detection.
+**TCG Identifier** is a Python-based tool for automatically identifying Pokémon Trading Card Game (TCG) cards from images or a live webcam feed. It uses computer vision to detect and isolate the card from its background and Optical Character Recognition (OCR) to extract key information like the set ID and card number. It supports all sets that have a *3 letter identification*, and uses OCR to find the card's name after looking up in a comprehensive card database.
+
 
 ## ✨ Features
 
-* **Robust Card Detection:** Uses HSV saturation and aggressive dilation to find the card, even against complex backgrounds or low-contrast borders.
-* **Perspective Correction:** Applies a four-point perspective transform to flatten the card, regardless of the angle in the input photo.
-* **Forced Aspect Ratio:** Guarantees a clean, rectangular crop by enforcing the standard 7:5 TCG aspect ratio.
-* **Targeted OCR:** Crops to the specific bottom-left area of the card (where set IDs and numbers are located) for faster and more accurate OCR using PaddleOCR.
-* **Detailed Debugging Output:** Generates intermediate image files to help visualize every step of the detection and cropping pipeline.
+*   **Robust Card Detection:** Locates cards in images, even against complex backgrounds.
+*   **Perspective Correction:** Applies a four-point perspective transform to "flatten" the card for accurate analysis.
+*   **Targeted OCR:** Crops the card image to the bottom section where the set ID and number are typically located, improving OCR accuracy.
+*   **Card Verification:** Looks up the extracted set ID and card number in a generated JSON database to find the card's name.
+*   **Multiple Scan Modes:**
+    *   `pictureScan.py`: Scans a directory of card images.
+    *   `camScan.py`: Scans for cards using a live webcam feed.
 
-## ⚙️ Prerequisites
+## ⚙️ Setup and Installation
 
-You must have Python 3 installed. This script relies on several external libraries:
+Follow these steps to set up the project and its dependencies.
 
-* **OpenCV (`cv2`):** For all computer vision tasks (contour detection, warping, cropping).
-* **NumPy:** For efficient array manipulation.
-* **PaddlePaddle/PaddleOCR:** For the OCR engine.
+### 1. Clone the Repository
 
-### Installation
+First, clone this repository to your local machine:
 
-1.  **Install Python Libraries:** It is highly recommended to use a virtual environment.
+```bash
+git clone <repository-url>
+cd tcg-ident
+```
+
+### 2. Install Python Dependencies
+
+It is highly recommended to use a virtual environment.
+
+```bash
+python3 -m venv env
+source env/bin/activate
+```
+
+This project requires several Python libraries. While a `requirements.txt` is not provided, you can install the necessary packages using pip:
+
+```bash
+pip install opencv-python numpy
+```
+
+### 3. Install PaddleOCR
+
+This project uses PaddleOCR for its text recognition capabilities. You must install the PaddlePaddle deep learning framework and the PaddleOCR library.
+
+```bash
+# Install PaddlePaddle (CPU version recommended for simplicity)
+pip install paddlepaddle
+
+# Install PaddleOCR
+pip install paddleocr
+```
+*Note: PaddleOCR will automatically download the necessary detection and recognition models the first time it runs.*
+
+### 4. Prepare the Card Database
+
+The script can verify the identified card against a comprehensive card database from **tcgdex**. To make it faster and usable for python, a script reads the data and extract the needed content, and then saves as a .json that can be used by python.
+
+1.  **Download the Database:** Download the latest card data from the [tcgdex/cards-database](https://github.com/tcgdex/cards-database) repository. You can either clone it or download it as a ZIP file.
+
+2.  **Organize Data:**
+    *   Create a folder named `tcgdex` in the root of this project if it doesn't exist.
+    *   Inside `tcgdex`, create a folder named `data`.
+    *   Copy the downloaded card data folders for Scarlet & Violet and Mega Evolution into the `tcgdex/data/` directory.
+    *   Only these and future sets with 3 letter card identification is usable for this method of identification.
+
+3.  **Generate the Lookup File:** Run the `get-card-data.py` script to process the raw data into a single, optimized JSON file (`card_data_lookup.json`) that the main scanning scripts use.
 
     ```bash
-	python3 -m venv env
-	source env/bin/activate
-    	pip install opencv-python numpy paddlepaddle paddleocr
+    python3 get-card-data.py
     ```
-    *(Note: PaddleOCR will automatically download necessary models on first run.)*
 
 ## 🚀 Usage
 
-### 1. Setup
+### Scanning from Image Files
 
-1.  Save the provided Python code as `get-set-full.py`.
-2.  Create a folder named `photos` in the same directory as the script.
-3.  Place all your TCG card images (JPG, JPEG, PNG) into the `photos` folder.
+1.  Place your card images (e.g., `.jpg`, `.png`) into the `photos` folder.
+2.  Run the `pictureScan.py` script. It will prompt you to use the default `photos` directory or specify a different one.
 
-### 2. Running the Script
+    ```bash
+    python3 pictureScan.py
+    ```
 
-Execute the script from your terminal:
+### Scanning from Webcam
 
-```bash
-python3 get-set-full.py
-```
+1.  Ensure you have a webcam connected.
+2.  Run the `camScan.py` script.
 
-### 3. Raspberry pi 5
+    ```bash
+    python3 camScan.py
+    ```
 
-You can try, but it is way to slow on a Rasperry pi to be useful. I tried this:
-
-* sudo apt-get install -y cmake wget git build-essential libopencv-dev python3-opencv
-* git clone --depth=1 https://github.com/PaddlePaddle/Paddle-Lite.git
-* cd Paddle-Lite
-* git fetch --tags
-* git checkout -b lite-v2.12-build v2.12
-* rm -rf build_py
-* mkdir build_py
-* cd build_py
-
-
+The script will display the live feed, and when it identifies a card, it will attempt to extract its information and display the result.

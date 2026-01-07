@@ -1,0 +1,1 @@
+Example pictures scanned of bottom part of card with webcam. Use with pictureScan.py without automatic cropping.

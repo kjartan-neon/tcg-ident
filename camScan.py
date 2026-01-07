@@ -4,8 +4,10 @@ import os
 import sys
 import time
 from paddleocr import PaddleOCR
+from ocr_processing import extract_card_info_from_text
 import pyfirmata2 as pyfirmata
 import serial
+import json
 
 # --- Configuration ---
 DEBUG_OUTPUT_FOLDER = "debug_output_webcam"
@@ -56,20 +58,16 @@ def preprocess_card_image_simple(img, debug_folder=None, filename_prefix="captur
 
 # --- OCR AND HEURISTIC FUNCTIONS (UNCHANGED) ---
 
-def identify_card_info(img_for_ocr, ocr_engine):
+def identify_card_info(img_for_ocr, ocr_engine, card_database=None):
     """
     Runs OCR and heuristic extraction on the cropped image.
-    FIXED: Robustly handles "SET EN" and "NUMBER/TOTAL" formats.
     """
     if img_for_ocr is None:
         return "--- FAILED: No Crop Input ---"
 
     result = ocr_engine.predict(img_for_ocr)
 
-    set_id = None
-    card_number = None
     detected_texts = []
-
     if result and isinstance(result, list) and len(result) > 0:
         ocr_result_object = result[0]
         if hasattr(ocr_result_object, 'rec_texts'):
@@ -77,58 +75,8 @@ def identify_card_info(img_for_ocr, ocr_engine):
         elif isinstance(ocr_result_object, dict) and 'rec_texts' in ocr_result_object:
             detected_texts = ocr_result_object['rec_texts']
     
-    # --- DEBUG: Output all found text ---
-    print("\n--- DEBUG: Raw OCR Text Output ---")
-    if detected_texts:
-        for text in detected_texts:
-            print(f"[RAW OCR]: {text}")
-    else:
-        print("[RAW OCR]: No text detected.")
-    print("---------------------------------")
-    # --- END DEBUG ---
-    
-    for text in detected_texts:
-        text = str(text).upper().strip()
-        
-        # --- Heuristic 1: Look for potential Set IDs (Robust to "XXX EN") ---
-        if text.isalpha() or ' ' in text:
-            parts = text.split()
-            potential_set_id = ""
-
-            # Case: TWM EN
-            if len(parts) >= 2 and parts[-1] in ['EN', 'FR', 'JP', 'DE', 'IT']: 
-                potential_set_id = parts[0]
-            # Case: TWM (only letters)
-            elif len(parts) == 1 and 2 <= len(parts[0]) <= 5 and parts[0].isalpha(): 
-                potential_set_id = parts[0]
-
-            # Final check and assignment
-            if potential_set_id and 2 <= len(potential_set_id) <= 5 and potential_set_id not in ['NO', 'TM']: 
-                set_id = potential_set_id
-        
-        # --- Heuristic 2: Look for potential Card Numbers (Robust to "123/456") ---
-        number_part = None
-        
-        if '/' in text:
-            # Handles "153/167"
-            parts = text.split('/')
-            if parts and parts[0].isdigit():
-                 number_part = parts[0]
-        elif text.isdigit() and len(text) <= 4:
-            # Handles standalone numbers like "153"
-            number_part = text
-        
-        if number_part is not None and number_part.isdigit():
-            card_number = number_part
-            # Exit the loop early if both pieces are found
-            if card_number and set_id: 
-                break 
-
-    if set_id and card_number:
-        return f"{set_id}-{card_number}"
-    else:
-        # Include found parts in the failure message for better debugging
-        return f"--- FAILED: OCR Heuristic (Set ID: {set_id}, Number: {card_number}) ---"
+    # Use the shared function for text processing
+    return extract_card_info_from_text(detected_texts, card_database)
 
 # --- PYFIRMATA CONTROL FUNCTION (UNCHANGED) ---
 
@@ -156,7 +104,7 @@ def run_card_feeder(board):
 
 # --- OFFLINE PROCESSING FUNCTION ---
 
-def process_images_from_folder(folder_path, ocr_engine):
+def process_images_from_folder(folder_path, ocr_engine, card_database=None):
     """
     Processes all images from a specified folder instead of using the webcam.
     """
@@ -190,7 +138,7 @@ def process_images_from_folder(folder_path, ocr_engine):
         
         img_for_ocr = preprocess_card_image_simple(frame, debug_folder=DEBUG_OUTPUT_FOLDER, filename_prefix=f"{filename_prefix}_offline")
         
-        result = identify_card_info(img_for_ocr, ocr_engine)
+        result = identify_card_info(img_for_ocr, ocr_engine, card_database)
         print(f"➡️  Result for {filename}: {result}")
 
     print("\n--- OFFLINE PROCESSING COMPLETE ---")
@@ -205,6 +153,18 @@ if __name__ == "__main__":
         print(f"Error initializing PaddleOCR: {e}")
         print("Check your PaddleOCR installation and dependencies.")
         sys.exit(1)
+
+    # --- Load Card Database ---
+    card_database = None
+    try:
+        with open('card_data_lookup.json', 'r') as f:
+            card_database = json.load(f)
+        print("Successfully loaded card database.")
+    except FileNotFoundError:
+        print("Warning: 'card_data_lookup.json' not found. Card names will not be looked up.")
+    except json.JSONDecodeError:
+        print("Error: Could not decode 'card_data_lookup.json'. File might be corrupted.")
+        card_database = None
 
     # --- 0. Ensure debug folder exists ---
     if not os.path.exists(DEBUG_OUTPUT_FOLDER):
@@ -224,7 +184,7 @@ if __name__ == "__main__":
             print("Invalid choice. Please enter 'y' or 'n'.")
 
     if process_offline:
-        process_images_from_folder(DEBUG_OUTPUT_FOLDER, ocr)
+        process_images_from_folder(DEBUG_OUTPUT_FOLDER, ocr, card_database)
         sys.exit(0)
 
     # --- 1. Webcam Setup ---
@@ -334,7 +294,7 @@ if __name__ == "__main__":
             else:
                 img_for_ocr_safe = None
                 
-            result = identify_card_info(img_for_ocr_safe, ocr)
+            result = identify_card_info(img_for_ocr_safe, ocr, card_database)
             
             if "FAILED" not in result:
                 # --- SUCCESS ---
