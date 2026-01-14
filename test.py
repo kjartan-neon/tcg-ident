@@ -1,29 +1,53 @@
-import easyocr
-import os
+from pyfirmata2 import Arduino, SERVO
+import sys
 
-# --- Configuration ---
-# Set the language (e.g., English)
-# The reader will automatically download models (if not cached)
-reader = easyocr.Reader(['en']) 
+# --- CONFIGURATION ---
+port = '/dev/cu.usbserial-1110'
+servo_pin = 9  # Ensure your servo is on Pin 9
 
-# Replace this with the path to your image
-IMAGE_PATH = 'photos/20250423_062747.jpg' 
+# --- SETUP ---
+print(f"Connecting to Arduino on {port}...")
+try:
+    board = Arduino(port)
+except Exception as e:
+    print(f"Error: Could not connect to {port}. Check your USB connection.")
+    sys.exit()
 
-# --- Execution ---
-print(f"--- Starting EasyOCR on {IMAGE_PATH} ---")
-if not os.path.exists(IMAGE_PATH):
-    print(f"Error: Image not found at {IMAGE_PATH}.")
-else:
-    try:
-        # Run the OCR pipeline
-        results = reader.readtext(IMAGE_PATH)
+# Configure the pin mode
+board.digital[servo_pin].mode = SERVO
+
+print("\n--- Servo Interactive Mode ---")
+print("Enter an angle between 0 and 180.")
+print("Type 'q' or 'exit' to quit.\n")
+
+# --- MAIN LOOP ---
+try:
+    while True:
+        user_input = input("Enter angle (0-180): ").strip()
         
-        # --- Result Parsing & Output ---
-        for (bbox, text, conf) in results:
-            print(f"Detected Text: {text}")
-            print(f"  - Confidence: {conf:.4f}")
+        if user_input.lower() in ['q', 'exit', 'quit']:
+            print("Exiting...")
+            break
+            
+        try:
+            angle = int(user_input)
+            
+            # Validation logic
+            if 0 <= angle <= 180:
+                print(f"Moving to {angle}°")
+                board.digital[servo_pin].write(angle)
+            else:
+                print("⚠️ Out of range! Please keep it between 0 and 180.")
+                
+        except ValueError:
+            print("⚠️ Invalid input. Please enter a whole number.")
 
-        print("--- EasyOCR Test Complete ---")
+except KeyboardInterrupt:
+    print("\nForced exit.")
 
-    except Exception as e:
-        print(f"An error occurred during OCR: {e}")
+finally:
+    # Cleanup: Reset servo to 90 degrees and close connection
+    if 'board' in locals():
+        board.digital[servo_pin].write(90)
+        board.exit()
+        print("Connection closed.")

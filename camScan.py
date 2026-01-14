@@ -17,12 +17,20 @@ WAIT_TIME_NO_TEXT = 3.0   # Wait time if OCR fails
 # --- Arduino/PyFirmata Configuration ---
 # IMPORTANT: Change this to your Arduino's serial port (e.g., 'COM3', '/dev/ttyACM0')
 # MUST USE pip install pyfirmata2 on newer pythons
-PORT = '/dev/cu.usbserial-120' 
+PORT = '/dev/cu.usbserial-1110'
 MOTOR_PIN = 8 
 MOTOR_RUN_TIME = 0.2      # Seconds the motor runs to move the card
 SETTLE_TIME = 0.5         # Time to wait after motor stops for card vibration to settle
+SERVO_PIN = 9
+SORTER_CENTER_POS = 23
+SORTER_PILE_A_POS = 1
+SORTER_PILE_B_POS = 46
+SORTER_SETTLE_TIME = 0.5
+SORTER_PILE_A_INTERMEDIATE_POS = 33
+SORTER_PILE_B_INTERMEDIATE_POS = 11
+SORTER_INTERMEDIATE_SETTLE_TIME = 0.2
 
-# --- SIMPLE PREPROCESSING FUNCTION (UNCHANGED) ---
+# --- SIMPLE PREPROCESSING FUNCTION  ---
 
 def preprocess_card_image_simple(img, debug_folder=None, filename_prefix="capture"):
     """
@@ -56,7 +64,7 @@ def preprocess_card_image_simple(img, debug_folder=None, filename_prefix="captur
     return final_crop
 
 
-# --- OCR AND HEURISTIC FUNCTIONS (UNCHANGED) ---
+# --- OCR AND HEURISTIC FUNCTIONS  ---
 
 def identify_card_info(img_for_ocr, ocr_engine, card_database=None):
     """
@@ -78,7 +86,7 @@ def identify_card_info(img_for_ocr, ocr_engine, card_database=None):
     # Use the shared function for text processing
     return extract_card_info_from_text(detected_texts, card_database)
 
-# --- PYFIRMATA CONTROL FUNCTION (UNCHANGED) ---
+# --- PYFIRMATA CONTROL FUNCTION  ---
 
 def run_card_feeder(board):
     """Activates the motor pin for a set duration to feed the next card."""
@@ -102,46 +110,69 @@ def run_card_feeder(board):
         print(f"ERROR: Could not communicate with Arduino motor pin {MOTOR_PIN}: {e}")
         return False
 
-# --- OFFLINE PROCESSING FUNCTION ---
-
-def process_images_from_folder(folder_path, ocr_engine, card_database=None):
-    """
-    Processes all images from a specified folder instead of using the webcam.
-    """
-    print(f"\n--- STARTING OFFLINE PROCESSING ---")
-    print(f"Source Folder: {folder_path}")
-
-    if not os.path.exists(folder_path) or not os.path.isdir(folder_path):
-        print(f"❌ ERROR: Folder not found or is not a directory: {folder_path}")
-        return
-
-    image_files = sorted([f for f in os.listdir(folder_path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))])
-
-    if not image_files:
-        print("❌ No images found in the folder to process.")
-        return
-
-    total_images = len(image_files)
-    print(f"Found {total_images} images to process.")
-
-    for i, filename in enumerate(image_files):
-        image_path = os.path.join(folder_path, filename)
-        print(f"\n--- Processing image {i+1}/{total_images}: {filename} ---")
+def wiggle_card(servo):
+    """Wiggles the servo slightly to try and improve OCR results."""
+    print("Wiggling card...")
+    try:
+        # Assumes the servo is at the center position.
+        # Wiggle back and forth by 10 degrees from center.
+        center_pos = SORTER_CENTER_POS
+        pos1 = center_pos - 10
+        pos2 = center_pos + 10
         
-        frame = cv2.imread(image_path)
-        if frame is None:
-            print(f"⚠️  Could not read image: {filename}")
-            continue
+        # Clamp values to be within 0-180 servo range
+        pos1 = max(0, min(180, pos1))
+        pos2 = max(0, min(180, pos2))
 
-        # Use a prefix based on the original filename for debug outputs
-        filename_prefix = os.path.splitext(filename)[0]
+        # Perform the wiggle
+        servo.write(pos1)
+        time.sleep(0.3)
+        servo.write(pos2)
+        time.sleep(0.3)
         
-        img_for_ocr = preprocess_card_image_simple(frame, debug_folder=DEBUG_OUTPUT_FOLDER, filename_prefix=f"{filename_prefix}_offline")
-        
-        result = identify_card_info(img_for_ocr, ocr_engine, card_database)
-        print(f"➡️  Result for {filename}: {result}")
+        # Return to center
+        servo.write(center_pos)
+        time.sleep(SORTER_SETTLE_TIME)
+        print("Wiggle complete. Returned to center.")
+    except Exception as e:
+        print(f"ERROR: Could not wiggle servo: {e}")
 
-    print("\n--- OFFLINE PROCESSING COMPLETE ---")
+def sort_card(servo, result_string):
+    """Moves the servo to sort the card based on its type with an intermediate step."""
+    print(f"Sorting card based on result: {result_string}")
+    
+    # Default to Pile B unless specific conditions for Pile A are met.
+    is_pile_a = False
+
+    # Explicit check for forced ejection to Pile B
+    if 'force_eject_pile_b' in result_string:
+        print("Forcing eject to Pile B due to scan failure.")
+        is_pile_a = False
+    # Check for 'fighting' type for Pile A sorting
+    elif 'fighting' in result_string.lower():
+        print(f"Card is a 'fighting' type. Sorting to Pile A.")
+        is_pile_a = True
+    else:
+        print(f"Card is not a 'fighting' type. Defaulting to Pile B.")
+        is_pile_a = False
+
+    if is_pile_a:
+        print(f"Card is a 'fighting' type. Sorting to Pile A.")
+        print(f"  - Moving to intermediate position: {SORTER_PILE_A_INTERMEDIATE_POS} degrees.")
+        servo.write(SORTER_PILE_A_INTERMEDIATE_POS)
+        time.sleep(SORTER_INTERMEDIATE_SETTLE_TIME)
+        print(f"  - Moving to final position: {SORTER_PILE_A_POS} degrees.")
+        servo.write(SORTER_PILE_A_POS)
+    else: # Sort to Pile B
+        print(f"Card is not a 'fighting' type or is a failure. Sorting to Pile B.")
+        print(f"  - Moving to intermediate position: {SORTER_PILE_B_INTERMEDIATE_POS} degrees.")
+        servo.write(SORTER_PILE_B_INTERMEDIATE_POS)
+        time.sleep(SORTER_INTERMEDIATE_SETTLE_TIME)
+        print(f"  - Moving to final position: {SORTER_PILE_B_POS} degrees.")
+        servo.write(SORTER_PILE_B_POS)
+    time.sleep(SORTER_SETTLE_TIME)
+
+
 # --- MAIN EXECUTION START ---
 
 if __name__ == "__main__":
@@ -170,23 +201,7 @@ if __name__ == "__main__":
     if not os.path.exists(DEBUG_OUTPUT_FOLDER):
         os.makedirs(DEBUG_OUTPUT_FOLDER)
         print(f"Created debug output folder: {DEBUG_OUTPUT_FOLDER}")
-
-    # --- NEW: Ask for offline processing mode ---
-    process_offline = False
-    while True:
-        offline_choice = input("Process images from folder instead of webcam? (y/n): ").lower()
-        if offline_choice == 'y':
-            process_offline = True
-            break
-        elif offline_choice == 'n':
-            break
-        else:
-            print("Invalid choice. Please enter 'y' or 'n'.")
-
-    if process_offline:
-        process_images_from_folder(DEBUG_OUTPUT_FOLDER, ocr, card_database)
-        sys.exit(0)
-
+        
     # --- 1. Webcam Setup ---
     cap = cv2.VideoCapture(WEBCAM_INDEX)
     if not cap.isOpened():
@@ -215,16 +230,39 @@ if __name__ == "__main__":
 
     # --- 3. PyFirmata/Arduino Connection Attempt (only if needed) ---
     board = None
+    servo = None
+    use_sorter = False
     if autonomous_mode:
+        while True:
+            sorter_choice = input("Use card sorter? (y/n): ").lower()
+            if sorter_choice == 'y':
+                use_sorter = True
+                break
+            elif sorter_choice == 'n':
+                break
+            else:
+                print("Invalid choice. Please enter 'y' or 'n'.")
         try:
             print(f"Attempting connection to Arduino on {PORT}...")
             board = pyfirmata.Arduino(PORT) # This will now use pyfirmata2
             board.digital[MOTOR_PIN].mode = pyfirmata.OUTPUT # This will also use pyfirmata2
             board.digital[MOTOR_PIN].write(0) # set board low
+            if use_sorter:
+                servo = board.get_pin(f'd:{SERVO_PIN}:s')
+                servo.write(SORTER_CENTER_POS)
+                time.sleep(SORTER_SETTLE_TIME)
             print("✅ Arduino connection successful.")
         except serial.SerialException as e:
-            print(f"❌ Could not connect to Arduino on port {PORT}. Exiting.")
+            print(f"❌ Could not connect to Arduino on port {PORT}. Exiting. Error: {e}")
             cap.release()
+            if board:
+                board.exit()
+            sys.exit(1)
+        except Exception as e:
+            print(f"❌ An error occurred during Arduino setup: {e}")
+            cap.release()
+            if board:
+                board.exit()
             sys.exit(1)
 
     print(f"\nMode Selected: {'AUTONOMOUS' if autonomous_mode else 'MANUAL'}.")
@@ -266,6 +304,11 @@ if __name__ == "__main__":
             
             # 1. Feed the card if needed
             if should_feed_next_card:
+                if use_sorter:
+                    print(f"Setting servo to center position ({SORTER_CENTER_POS} degrees)...")
+                    servo.write(SORTER_CENTER_POS)
+                    time.sleep(SORTER_SETTLE_TIME)
+                
                 if not run_card_feeder(board):
                     print("Exiting due to feeder error.")
                     break
@@ -285,25 +328,92 @@ if __name__ == "__main__":
         if trigger_scan:
             print(f"\nSCAN TRIGGERED ({'Auto' if autonomous_mode else 'Manual'})...")
             
-            filename_prefix = f"scan_{scan_count:03d}_{int(time.time())}" 
-            img_for_ocr = preprocess_card_image_simple(frame, debug_folder=DEBUG_OUTPUT_FOLDER, filename_prefix=filename_prefix)
-            
-            # CRITICAL FIX: Create a deep copy to prevent Segmentation Fault
-            if img_for_ocr is not None:
-                img_for_ocr_safe = img_for_ocr.copy() 
-            else:
-                img_for_ocr_safe = None
+            result = "FAILED" # Default to failed
+
+            # --- Initial Scan Loop (5 retries) ---
+            for attempt in range(5):
+                scan_retries = attempt + 1
+                print(f"Scanning card... (Attempt {scan_retries}/5)")
+
+                # We need a fresh frame for each attempt
+                ret, current_frame = cap.read()
+                if not ret:
+                    print("Error: Failed to grab frame for scan attempt.")
+                    time.sleep(1)
+                    continue # Try again
+
+                # Update the live view with the frame being processed
+                cv2.imshow('TCG-ident Live', current_frame)
+                cv2.waitKey(1)
+
+                filename_prefix = f"scan_{scan_count:03d}_{int(time.time())}_attempt_{scan_retries}" 
+                img_for_ocr = preprocess_card_image_simple(current_frame, debug_folder=DEBUG_OUTPUT_FOLDER, filename_prefix=filename_prefix)
                 
-            result = identify_card_info(img_for_ocr_safe, ocr, card_database)
-            
+                if img_for_ocr is not None:
+                    img_for_ocr_safe = img_for_ocr.copy() 
+                else:
+                    img_for_ocr_safe = None
+                    
+                result = identify_card_info(img_for_ocr_safe, ocr, card_database)
+                
+                if "FAILED" not in result:
+                    break # Success, exit the retry loop
+                else:
+                    print(f"Scan attempt {scan_retries} failed. Result: {result}")
+                    if attempt < 4: # Don't sleep on the last attempt
+                        time.sleep(1)
+
+            # --- Wiggle and Retry Loop (if initial scan failed) ---
+            if "FAILED" in result and autonomous_mode and use_sorter:
+                for attempt in range(3):
+                    wiggle_retries = attempt + 1
+                    print(f"\nInitial scans failed. Wiggling card and retrying... (Wiggle Attempt {wiggle_retries}/3)")
+                    
+                    # Wiggle the card
+                    wiggle_card(servo)
+                    time.sleep(0.5) # Settle time
+
+                    # Grab fresh frame and scan again
+                    ret, current_frame = cap.read()
+                    if not ret:
+                        print("Error: Failed to grab frame for wiggle-scan attempt.")
+                        time.sleep(1)
+                        continue
+
+                    # Update the live view
+                    cv2.imshow('TCG-ident Live', current_frame)
+                    cv2.waitKey(1)
+
+                    filename_prefix = f"scan_{scan_count:03d}_{int(time.time())}_wiggle_{wiggle_retries}" 
+                    img_for_ocr = preprocess_card_image_simple(current_frame, debug_folder=DEBUG_OUTPUT_FOLDER, filename_prefix=filename_prefix)
+                    
+                    if img_for_ocr is not None:
+                        img_for_ocr_safe = img_for_ocr.copy()
+                    else:
+                        img_for_ocr_safe = None
+                    
+                    result = identify_card_info(img_for_ocr_safe, ocr, card_database)
+
+                    if "FAILED" not in result:
+                        break # Success, exit the wiggle loop
+                    else:
+                        print(f"Wiggle-scan attempt {wiggle_retries} failed. Result: {result}")
+                        if attempt < 2: # Don't sleep on last attempt
+                            time.sleep(1)
+
+            # --- Final Result Processing ---
             if "FAILED" not in result:
                 # --- SUCCESS ---
                 print(f"✅ IDENTIFIED: {result}")
                 
+                if autonomous_mode and use_sorter:
+                    sort_card(servo, result)
+                
                 # Show result briefly on the live frame
-                cv2.putText(frame, result, (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3)
-                cv2.imshow('TCG-ident Live', frame)
-                cv2.waitKey(100) # Show result briefly
+                success_frame = frame.copy()
+                cv2.putText(success_frame, result, (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3)
+                cv2.imshow('TCG-ident Live', success_frame)
+                cv2.waitKey(2000) # Show result for 2 seconds
                 
                 scan_count += 1
                 
@@ -311,14 +421,21 @@ if __name__ == "__main__":
                     should_feed_next_card = True # Ready to feed the next one
                 
             else:
-                # --- FAILURE ---
-                print(f"❌ SCAN FAILED: {result}.")
+                # --- FINAL FAILURE ---
+                print(f"❌ ALL SCAN ATTEMPTS FAILED. Last result: {result}.")
                 
                 if autonomous_mode:
-                    print("Retrying scan on the SAME card after 1 second.")
-                    time.sleep(1)
+                    print("Ejecting card to Pile B.")
+                    if use_sorter:
+                        sort_card(servo, "force_eject_pile_b") # Force eject to B
+                    else:
+                        # If no sorter, we still need to move on
+                        print("Sorter not in use, cannot eject. Moving to next card anyway.")
+                    
+                    should_feed_next_card = True # Give up and move on.
                 else:
-                    # In manual mode, wait for the user to press 'n' again
+                    # In manual mode, we just report failure and wait for 'n' again.
+                    print("Scan failed. Press 'n' to try again.")
                     pass
                 
     # --- Cleanup ---
