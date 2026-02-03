@@ -42,6 +42,30 @@ def four_point_transform(image, pts, target_width, target_height):
     warped = cv2.warpPerspective(image, M, (target_width, target_height))
     return warped
 
+def corner_crop_image(image_path, height_percent=0.50, width_percent=0.50):
+    """
+    Crops the lower-left corner of the image.
+    Default: 50% height from bottom, 50% width from left.
+    """
+    img = cv2.imread(image_path)
+    if img is None:
+        print(f"Error: Could not read image at {image_path}")
+        return None
+    
+    height, width = img.shape[:2]
+    
+    # Calculate crop dimensions
+    crop_height = int(height * height_percent)
+    crop_width = int(width * width_percent)
+    
+    # Crop lower-left corner
+    y_start = height - crop_height
+    x_start = 0
+    
+    cropped = img[y_start:height, x_start:crop_width]
+    
+    return cropped
+
 def preprocess_card_image(image_path, target_width=800, target_height=1120, debug_output_folder=None):
     """
     Locates, crops, flattens, and reduces resolution of a card from a full image.
@@ -263,19 +287,23 @@ if __name__ == "__main__":
         print("Error: Could not decode 'card_data_lookup.json'. File might be corrupted.")
         card_database = None # Ensure it's None if loading fails
 
-    # --- NEW: Ask for cropping mode ---
+    # --- Ask for cropping mode ---
     cropping_mode = ''
-    while cropping_mode not in ['c', 'f']:
-        cropping_mode = input("Do you want to use automatic cropping (c) of images or OCR full images (f)? ").lower()
+    while cropping_mode not in ['c', 'd', 'f']:
+        print("Cropping options:")
+        print("  c = Corner crop (lower-left 50% height, 50% width - lightweight)")
+        print("  d = Detect crop (automatic card detection - heavier processing)")
+        print("  f = Full image (no cropping)")
+        cropping_mode = input("Select cropping mode (c/d/f): ").lower()
 
     print("Initializing PaddleOCR (This may take a moment and download models the first time)...")
     try:
-        # The 'det_model_name' and 'rec_model_name' arguments are for newer versions of paddleocr.
-        # If you get an "Unknown argument" error, it means your paddleocr version is old.
-        # Please run: pip uninstall -y paddleocr paddlepaddle
-        # Then:      pip install --no-cache-dir paddleocr paddlepaddle
-        # This uses the latest recommended arguments for CPU processing.
-        ocr = PaddleOCR(use_textline_orientation=True, lang='en')
+        # Disable OneDNN/MKLDNN for AMD Ryzen CPUs (it's Intel-specific)
+        ocr = PaddleOCR(
+            use_textline_orientation=True,
+            lang='en',
+            enable_mkldnn=False
+        )
     except Exception as e:
         print(f"Error initializing PaddleOCR: {e}")
         print("Please check your PaddleOCR installation and its dependencies.")
@@ -298,6 +326,8 @@ if __name__ == "__main__":
         
         img_to_process = None
         if cropping_mode == 'c':
+            img_to_process = corner_crop_image(path)
+        elif cropping_mode == 'd':
             img_to_process = preprocess_card_image(path, debug_output_folder=DEBUG_OUTPUT_FOLDER)
         else: # mode == 'f'
             img_to_process = cv2.imread(path)
