@@ -4,7 +4,10 @@ import os
 import glob
 import sys
 import json
+from doctr.models import ocr_predictor
+from doctr.io import DocumentFile
 from paddleocr import PaddleOCR
+from PIL import Image
 from ocr_processing import extract_card_info_from_text
 
 # --- Configuration ---
@@ -97,32 +100,44 @@ def preprocess_card_image(image_path, target_width=800, target_height=1120, debu
         
     # 1. HSV Saturation Isolation
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    saturation = hsv[:, :, 1]
-    blurred = cv2.GaussianBlur(saturation, (7, 7), 0)
-    _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    s_channel = hsv[:, :, 1]
     
-    # --- Aggressive Dilation and Erosion ---
-    dilate_kernel_large = np.ones((25, 25), np.uint8) 
-    thresh = cv2.dilate(thresh, dilate_kernel_large, iterations=2) 
-    
-    erode_kernel_small = np.ones((7, 7), np.uint8)
-    thresh = cv2.erode(thresh, erode_kernel_small, iterations=1)
-    
-    # Clean up remaining noise
-    kernel_close_open = np.ones((5, 5), np.uint8)
-    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel_close_open)
-    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel_close_open) 
-
-    # --- Debugging: Save the thresholded image ---
+    # --- Debugging: Save S-channel ---
     if debug_output_folder:
         try:
-            debug_thresh_filename = os.path.join(debug_output_folder, f"{base_name}_threshold.jpg")
-            cv2.imwrite(debug_thresh_filename, thresh)
-            print(f"Debug: Saved thresholded image to '{debug_thresh_filename}'")
+            debug_filename = os.path.join(debug_output_folder, f"{base_name}_1_s_channel.jpg")
+            cv2.imwrite(debug_filename, s_channel)
+            print(f"Debug: Saved S-channel to '{debug_filename}'")
         except Exception as e:
-            print(f"Error saving debug threshold image: {e}")
+            print(f"Error saving debug S-channel: {e}")
+    # --- End Debugging ---
 
-    # 2. Contour Detection
+    # 2. Thresholding and Morphology
+    _, thresh = cv2.threshold(s_channel, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    # --- Debugging: Save threshold ---
+    if debug_output_folder:
+        try:
+            debug_filename = os.path.join(debug_output_folder, f"{base_name}_2_threshold.jpg")
+            cv2.imwrite(debug_filename, thresh)
+            print(f"Debug: Saved threshold to '{debug_filename}'")
+        except Exception as e:
+            print(f"Error saving debug threshold: {e}")
+    # --- End Debugging ---
+
+    kernel_dilation = np.ones((11, 11), np.uint8)
+    thresh = cv2.dilate(thresh, kernel_dilation, iterations=3)
+    
+    # --- Debugging: Save dilated threshold ---
+    if debug_output_folder:
+        try:
+            debug_filename = os.path.join(debug_output_folder, f"{base_name}_3_dilated.jpg")
+            cv2.imwrite(debug_filename, thresh)
+            print(f"Debug: Saved dilated threshold to '{debug_filename}'")
+        except Exception as e:
+            print(f"Error saving debug dilated: {e}")
+    # --- End Debugging ---
+
     contours, _ = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     # 3. Find the Largest, Card-like Contour
@@ -148,49 +163,65 @@ def preprocess_card_image(image_path, target_width=800, target_height=1120, debu
         
         if width == 0 or height == 0:
             continue
-
-        current_aspect_ratio = height / width
         
-        # Check if aspect ratio is close to card's (with a generous tolerance)
-        if (CARD_ASPECT_RATIO * 0.8 < current_aspect_ratio < CARD_ASPECT_RATIO * 1.2) and (area > max_contour_area):
-            max_contour_area = area
-            largest_card_contour = c
+        # Calculate aspect ratio
+        aspect_ratio = height / width
+        
+        # Check if aspect ratio is close to 1.4 (card-like)
+        aspect_tolerance = 0.3
+        if abs(aspect_ratio - CARD_ASPECT_RATIO) < aspect_tolerance:
+            if area > max_contour_area:
+                largest_card_contour = c
+                max_contour_area = area
 
     if largest_card_contour is None:
-        print("Warning: Could not locate a significant, card-like contour with a reasonable aspect ratio.")
+        print("Warning: No suitable card-like contour found. Returning None.")
         return None
 
-    # Use minAreaRect on the *chosen* largest_card_contour
-    rect = cv2.minAreaRect(largest_card_contour)
-    (center, (width, height), angle) = rect
+    # --- Debugging: Draw all contours and highlight the chosen one ---
+    if debug_output_folder:
+        try:
+            debug_contour_img = img.copy()
+            cv2.drawContours(debug_contour_img, contours[:5], -1, (0, 255, 0), 2)  # Top 5 in green
+            cv2.drawContours(debug_contour_img, [largest_card_contour], -1, (0, 0, 255), 3)  # Chosen in red
+            debug_filename = os.path.join(debug_output_folder, f"{base_name}_4_contours.jpg")
+            cv2.imwrite(debug_filename, debug_contour_img)
+            print(f"Debug: Saved contours to '{debug_filename}'")
+        except Exception as e:
+            print(f"Error saving debug contours: {e}")
+    # --- End Debugging ---
 
-    # Ensure height is the longer dimension
+    # Get the minimum area rectangle and force it to 7:5 aspect ratio
+    rect = cv2.minAreaRect(largest_card_contour)
+    box = cv2.boxPoints(rect)
+    box = np.intp(box)
+    
+    # Calculate the dimensions and force 7:5 aspect ratio
+    (center, (width, height), angle) = rect
     if width > height:
         width, height = height, width
-        angle += 90
-        
-    # Calculate the ideal width and height based on the detected size and the 7:5 ratio
-    ideal_height = height
-    ideal_width = ideal_height / CARD_ASPECT_RATIO
-
-    # Add padding
-    padding_factor = 1.04 
-    ideal_height *= padding_factor
-    ideal_width *= padding_factor
+        angle = angle + 90
     
-    # Construct the 4 points (box) based on forced aspect ratio
-    rect_forced = (center, (ideal_width, ideal_height), angle)
-    card_contour_for_warp = cv2.boxPoints(rect_forced)
+    # Force aspect ratio to exactly 7:5
+    target_aspect = CARD_ASPECT_RATIO
+    if height / width > target_aspect:
+        # Height is too large, reduce it
+        height = width * target_aspect
+    else:
+        # Width is too large, reduce it
+        width = height / target_aspect
     
-    # FIX 1: Replace np.int0 with np.int32
-    card_contour_for_warp = np.int32(card_contour_for_warp) 
-
-    # --- Debugging: Draw the FORCED 7:5 contour (blue) ---
+    # Create new rotated rectangle with forced dimensions
+    forced_rect = (center, (width, height), angle)
+    card_contour_for_warp = cv2.boxPoints(forced_rect)
+    card_contour_for_warp = np.intp(card_contour_for_warp)
+    
+    # --- Debugging: Draw forced 7:5 contour in blue ---
     if debug_output_folder:
-        debug_forced_contour_img = img.copy()
-        cv2.drawContours(debug_forced_contour_img, [card_contour_for_warp], 0, (255, 0, 0), 4) 
         try:
-            debug_filename = os.path.join(debug_output_folder, f"{base_name}_contours_forced_blue.jpg")
+            debug_forced_contour_img = img.copy()
+            cv2.drawContours(debug_forced_contour_img, [card_contour_for_warp], -1, (255, 0, 0), 3)  # Blue
+            debug_filename = os.path.join(debug_output_folder, f"{base_name}_5_contours_forced_blue.jpg")
             cv2.imwrite(debug_filename, debug_forced_contour_img)
             print(f"Debug: Saved forced 7:5 contour detection to '{debug_filename}'")
         except Exception as e:
@@ -204,39 +235,66 @@ def preprocess_card_image(image_path, target_width=800, target_height=1120, debu
         warped = four_point_transform(original_img, card_contour_original_scale.reshape(4, 2), target_width, target_height)
     else:
         warped = four_point_transform(img, card_contour_for_warp.reshape(4, 2), target_width, target_height)
-    
-    # 5. Crop the SET ID/Number area (bottom-LEFT quadrant)
-    crop_height_perc = 0.20 
-    crop_width_perc = 0.35  
-    
-    y_start = int(target_height * (1 - crop_height_perc))
-    x_start = 0 
-    x_end = int(target_width * crop_width_perc)
-    
-    final_crop = warped[y_start:target_height, x_start:x_end]
 
-    # --- DEBUGGING STEP: Save the final processed image ---
+    # --- Debugging: Save warped card ---
     if debug_output_folder:
         try:
-            debug_filename = os.path.join(debug_output_folder, f"{base_name}_processed_final_crop.jpg")
-            cv2.imwrite(debug_filename, final_crop)
-            print(f"Debug: Saved final processed crop to '{debug_filename}'")
+            debug_filename = os.path.join(debug_output_folder, f"{base_name}_6_warped.jpg")
+            cv2.imwrite(debug_filename, warped)
+            print(f"Debug: Saved warped card to '{debug_filename}'")
         except Exception as e:
-            print(f"Error saving debug final crop to '{debug_filename}': {e}")
+            print(f"Error saving debug warped: {e}")
+    # --- End Debugging ---
 
-    return final_crop
+    return warped
 
-# --- OCR and Heuristic Functions (unchanged) ---
+# --- OCR and Heuristic Functions ---
 
-def identify_card_info(img_for_ocr, ocr_engine, card_database=None):
+def identify_card_info_doctr(img_for_ocr, ocr_model, card_database=None):
     """
-    Runs OCR and heuristic extraction on a given image.
+    Runs DocTR OCR and heuristic extraction on a given image.
     """
     if img_for_ocr is None:
         print("Cannot process a null image. Skipping OCR.")
         return None
 
-    result = ocr_engine.predict(img_for_ocr)
+    # Convert OpenCV image (BGR) to RGB numpy array
+    img_rgb = cv2.cvtColor(img_for_ocr, cv2.COLOR_BGR2RGB)
+    
+    # DocTR expects numpy array or PIL Image
+    # Run OCR
+    result = ocr_model([img_rgb])
+    
+    # Extract text from DocTR results
+    detected_texts = []
+    if result:
+        # DocTR returns a Document object
+        # Navigate: result.pages[0].blocks -> lines -> words
+        for page in result.pages:
+            for block in page.blocks:
+                for line in block.lines:
+                    # Concatenate all words in the line
+                    line_text = ' '.join([word.value for word in line.words])
+                    if line_text.strip():
+                        detected_texts.append(line_text.strip())
+    
+    # Use the shared function for text processing
+    info = extract_card_info_from_text(detected_texts, card_database)
+
+    if "FAILED" in info:
+        return None
+    else:
+        return info
+
+def identify_card_info_paddle(img_for_ocr, paddle_ocr, card_database=None):
+    """
+    Runs PaddleOCR and heuristic extraction on a given image (fallback method).
+    """
+    if img_for_ocr is None:
+        print("Cannot process a null image. Skipping OCR.")
+        return None
+
+    result = paddle_ocr.predict(img_for_ocr)
 
     detected_texts = []
     if result and isinstance(result, list) and len(result) > 0:
@@ -251,7 +309,6 @@ def identify_card_info(img_for_ocr, ocr_engine, card_database=None):
     info = extract_card_info_from_text(detected_texts, card_database)
 
     if "FAILED" in info:
-        print(f"Final Extraction Failed: {info}")
         return None
     else:
         return info
@@ -296,18 +353,35 @@ if __name__ == "__main__":
         print("  f = Full image (no cropping)")
         cropping_mode = input("Select cropping mode (c/d/f): ").lower()
 
-    print("Initializing PaddleOCR (This may take a moment and download models the first time)...")
+    print("Initializing DocTR OCR with MobileNet (This may take a moment and download models the first time)...")
     try:
-        # Disable OneDNN/MKLDNN for AMD Ryzen CPUs (it's Intel-specific)
-        ocr = PaddleOCR(
+        # Initialize DocTR with lightweight MobileNet models
+        # det_arch: detection architecture (db_mobilenet_v3_large is fast and accurate)
+        # reco_arch: recognition architecture (crnn_mobilenet_v3_small is lightweight)
+        ocr_model = ocr_predictor(
+            det_arch='db_mobilenet_v3_large',
+            reco_arch='crnn_mobilenet_v3_small',
+            pretrained=True
+        )
+        print("✅ DocTR OCR models loaded successfully.")
+    except Exception as e:
+        print(f"Error initializing DocTR OCR: {e}")
+        print("Please check your DocTR installation and its dependencies.")
+        print("Install with: pip install python-doctr[torch]")
+        sys.exit(1)
+
+    print("Initializing PaddleOCR (fallback engine)...")
+    try:
+        paddle_ocr = PaddleOCR(
             use_textline_orientation=True,
             lang='en',
             enable_mkldnn=False
         )
+        print("✅ PaddleOCR loaded successfully (fallback ready).")
     except Exception as e:
-        print(f"Error initializing PaddleOCR: {e}")
-        print("Please check your PaddleOCR installation and its dependencies.")
-        sys.exit(1)
+        print(f"Warning: Could not initialize PaddleOCR fallback: {e}")
+        print("Will continue with DocTR only.")
+        paddle_ocr = None
 
     image_paths = []
     for ext in SUPPORTED_EXTENSIONS:
@@ -337,13 +411,26 @@ if __name__ == "__main__":
             results[os.path.basename(path)] = "--- FAILED (Preprocessing/Read) ---"
             continue
             
-        info = identify_card_info(img_to_process, ocr, card_database)
+        # Try DocTR first (faster)
+        print("Attempting OCR with DocTR (fast)...")
+        info = identify_card_info_doctr(img_to_process, ocr_model, card_database)
 
         if info:
-            print(f"✅ IDENTIFIED: {info}")
+            print(f"✅ IDENTIFIED with DocTR: {info}")
             results[os.path.basename(path)] = info
+        elif paddle_ocr is not None:
+            # Fallback to PaddleOCR if DocTR failed
+            print("⚠️  DocTR failed to identify card. Trying PaddleOCR fallback...")
+            info = identify_card_info_paddle(img_to_process, paddle_ocr, card_database)
+            
+            if info:
+                print(f"✅ IDENTIFIED with PaddleOCR (fallback): {info}")
+                results[os.path.basename(path)] = f"{info} [PaddleOCR]"
+            else:
+                print(f"❌ IDENTIFICATION FAILED with both engines.")
+                results[os.path.basename(path)] = "--- FAILED ---"
         else:
-            print(f"❌ IDENTIFICATION FAILED.")
+            print(f"❌ IDENTIFICATION FAILED (no fallback available).")
             results[os.path.basename(path)] = "--- FAILED ---"
 
     print("\n" + "="*40)
