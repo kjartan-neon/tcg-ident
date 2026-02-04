@@ -4,6 +4,7 @@ import os
 import sys
 import time
 from paddleocr import PaddleOCR
+from doctr.models import ocr_predictor
 from ocr_processing import extract_card_info_from_text
 import pyfirmata2 as pyfirmata
 import serial
@@ -66,14 +67,45 @@ def preprocess_card_image_simple(img, debug_folder=None, filename_prefix="captur
 
 # --- OCR AND HEURISTIC FUNCTIONS  ---
 
-def identify_card_info(img_for_ocr, ocr_engine, card_database=None):
+def identify_card_info_doctr(img_for_ocr, ocr_model, card_database=None):
     """
-    Runs OCR and heuristic extraction on the cropped image.
+    Runs DocTR OCR and heuristic extraction on the cropped image (fast method).
     """
     if img_for_ocr is None:
-        return "--- FAILED: No Crop Input ---"
+        return None
 
-    result = ocr_engine.predict(img_for_ocr)
+    # Convert OpenCV image (BGR) to RGB numpy array
+    img_rgb = cv2.cvtColor(img_for_ocr, cv2.COLOR_BGR2RGB)
+    
+    # Run OCR
+    result = ocr_model([img_rgb])
+    
+    # Extract text from DocTR results
+    detected_texts = []
+    if result:
+        for page in result.pages:
+            for block in page.blocks:
+                for line in block.lines:
+                    line_text = ' '.join([word.value for word in line.words])
+                    if line_text.strip():
+                        detected_texts.append(line_text.strip())
+    
+    # Use the shared function for text processing
+    info = extract_card_info_from_text(detected_texts, card_database)
+    
+    if "FAILED" in info:
+        return None
+    else:
+        return info
+
+def identify_card_info_paddle(img_for_ocr, paddle_ocr, card_database=None):
+    """
+    Runs PaddleOCR and heuristic extraction on the cropped image (fallback method).
+    """
+    if img_for_ocr is None:
+        return None
+
+    result = paddle_ocr.predict(img_for_ocr)
 
     detected_texts = []
     if result and isinstance(result, list) and len(result) > 0:
@@ -84,7 +116,34 @@ def identify_card_info(img_for_ocr, ocr_engine, card_database=None):
             detected_texts = ocr_result_object['rec_texts']
     
     # Use the shared function for text processing
-    return extract_card_info_from_text(detected_texts, card_database)
+    info = extract_card_info_from_text(detected_texts, card_database)
+    
+    if "FAILED" in info:
+        return None
+    else:
+        return info
+
+def identify_card_info(img_for_ocr, doctr_model, paddle_ocr, card_database=None):
+    """
+    Tries DocTR first (fast), then falls back to PaddleOCR if needed.
+    Returns the result string or "FAILED".
+    """
+    if img_for_ocr is None:
+        return "--- FAILED: No Crop Input ---"
+    
+    # Try DocTR first
+    result = identify_card_info_doctr(img_for_ocr, doctr_model, card_database)
+    
+    if result is not None:
+        return result
+    
+    # Fallback to PaddleOCR
+    result = identify_card_info_paddle(img_for_ocr, paddle_ocr, card_database)
+    
+    if result is not None:
+        return f"{result} [Paddle]"
+    
+    return "--- FAILED: Both OCR engines ---"
 
 # --- PYFIRMATA CONTROL FUNCTION  ---
 
@@ -177,9 +236,24 @@ def sort_card(servo, result_string):
 
 if __name__ == "__main__":
     
-    print("Initializing PaddleOCR...")
+    print("Initializing DocTR OCR with MobileNet (fast, primary engine)...")
     try:
-        ocr = PaddleOCR(use_textline_orientation=True, lang='en') 
+        doctr_model = ocr_predictor(
+            det_arch='db_mobilenet_v3_large',
+            reco_arch='crnn_mobilenet_v3_small',
+            pretrained=True
+        )
+        print("✅ DocTR OCR loaded successfully.")
+    except Exception as e:
+        print(f"Error initializing DocTR OCR: {e}")
+        print("Please check your DocTR installation and its dependencies.")
+        print("Install with: pip install python-doctr[torch]")
+        sys.exit(1)
+    
+    print("Initializing PaddleOCR (fallback engine)...")
+    try:
+        paddle_ocr = PaddleOCR(use_textline_orientation=True, lang='en', enable_mkldnn=False) 
+        print("✅ PaddleOCR loaded successfully (fallback ready).")
     except Exception as e:
         print(f"Error initializing PaddleOCR: {e}")
         print("Check your PaddleOCR installation and dependencies.")
@@ -363,7 +437,7 @@ if __name__ == "__main__":
                 else:
                     img_for_ocr_safe = None
                     
-                result = identify_card_info(img_for_ocr_safe, ocr, card_database)
+                result = identify_card_info(img_for_ocr_safe, doctr_model, paddle_ocr, card_database)
                 
                 if "FAILED" not in result:
                     break # Success, exit the retry loop
@@ -401,7 +475,7 @@ if __name__ == "__main__":
                     else:
                         img_for_ocr_safe = None
                     
-                    result = identify_card_info(img_for_ocr_safe, ocr, card_database)
+                    result = identify_card_info(img_for_ocr_safe, doctr_model, paddle_ocr, card_database)
 
                     if "FAILED" not in result:
                         break # Success, exit the wiggle loop
