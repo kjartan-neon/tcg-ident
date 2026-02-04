@@ -10,8 +10,9 @@
 *   **Targeted OCR:** Crops the card image to the bottom section where the set ID and number are typically located, improving OCR accuracy.
 *   **Card Verification:** Looks up the extracted set ID and card number in a generated JSON database to find the card's name.
 *   **Multiple Scan Modes:**
-    *   `pictureScan.py`: Scans a directory of card images.
-    *   `camScan.py`: Scans for cards using a live webcam feed.
+    *   `pictureScan.py`: Scans a directory of card images using PaddleOCR.
+    *   `pictureScan-alt.py`: Scans a directory of card images using Surya OCR (alternative engine).
+    *   `camScan.py`: Scans for cards using a live webcam feed with PaddleOCR.
 
 ## ⚙️ Setup and Installation
 
@@ -41,9 +42,13 @@ This project requires several Python libraries. While a `requirements.txt` is no
 pip install opencv-python numpy
 ```
 
-### 3. Install PaddleOCR
+### 3. Install OCR Engine
 
-This project uses PaddleOCR for its text recognition capabilities. You must install the PaddlePaddle deep learning framework and the PaddleOCR library.
+This project supports two OCR engines:
+
+#### Option A: PaddleOCR (Default)
+
+This is used by `pictureScan.py` and `camScan.py`. Install PaddlePaddle and PaddleOCR:
 
 ```bash
 # Install PaddlePaddle (CPU version recommended for simplicity)
@@ -53,6 +58,16 @@ pip install paddlepaddle
 pip install paddleocr
 ```
 *Note: PaddleOCR will automatically download the necessary detection and recognition models the first time it runs.*
+
+#### Option B: Surya OCR (Alternative)
+
+This is used by `pictureScan-alt.py`. Install the specific version that works correctly:
+
+```bash
+# Install Surya OCR version 0.16.0 (version 0.17.1+ has compatibility issues)
+pip install surya-ocr==0.16.0
+```
+*Note: Surya OCR will automatically download models on first run. It requires more disk space and memory than PaddleOCR but may provide better accuracy for some text recognition tasks.*
 
 ### 4. Prepare the Card Database
 
@@ -77,11 +92,21 @@ The script can verify the identified card against a comprehensive card database 
 ### Scanning from Image Files
 
 1.  Place your card images (e.g., `.jpg`, `.png`) into the `photos` folder.
-2.  Run the `pictureScan.py` script. It will prompt you to use the default `photos` directory or specify a different one.
+2.  Run either scanning script depending on which OCR engine you installed:
 
+    **Using PaddleOCR (default):**
     ```bash
     python3 pictureScan.py
     ```
+    
+    **Using Surya OCR (alternative):**
+    ```bash
+    python3 pictureScan-alt.py
+    ```
+
+3.  The script will prompt you to:
+    *   Use the default `photos` directory or specify a different one
+    *   Choose a cropping mode (corner crop, detect crop, or full image)
 
 ### Scanning from Webcam
 
@@ -91,5 +116,7 @@ The script can verify the identified card against a comprehensive card database 
     ```bash
     python3 camScan.py
     ```
+
+3.  Select your mode (Autonomous or Manual) and follow the prompts.
 
 The script will display the live feed, and when it identifies a card, it will attempt to extract its information and display the result.

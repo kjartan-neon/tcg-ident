@@ -79,8 +79,13 @@ def extract_card_info_from_text(detected_texts, card_database=None):
         # Pref 1: "XXX/YYY" format (highest priority)
         if '/' in cleaned_text:
             parts = cleaned_text.split('/')
-            num_part = parts[0].replace('O', '0')
-            if len(parts) == 2 and num_part.isdigit():
+            # Extract just the number part, handling cases like "G SVIEN 196/198"
+            num_part = parts[0].strip()
+            # Get the last token before the slash
+            if ' ' in num_part:
+                num_part = num_part.split()[-1]
+            num_part = num_part.replace('O', '0')
+            if num_part.isdigit():
                 num_candidates.append((1, num_part))
 
         # Pref 2: Standalone number (lower priority)
@@ -88,19 +93,42 @@ def extract_card_info_from_text(detected_texts, card_database=None):
             num_candidates.append((2, cleaned_text.replace('O', '0')))
 
         # --- Set ID Logic ---
+        # First, try to extract a pattern like "H SFAEN" or "G SVIEN"
+        # Remove leading single letters and spaces
+        tokens = cleaned_text.split()
         potential_set_id = cleaned_text
+        
+        # If we have multiple tokens, look for the set code pattern
+        if len(tokens) > 1:
+            for token in tokens:
+                # Skip single character tokens (H, G, etc.) and numbers
+                if len(token) <= 1 or token.isdigit() or '/' in token:
+                    continue
+                # This could be our set code
+                potential_set_id = token
+                break
+        
         is_suffixed = False
         
-        # Check for language suffixes, which is a strong signal
-        parts = potential_set_id.split()
-        if len(parts) > 1 and parts[-1] in SUPPORTED_LANGUAGES:
-            potential_set_id = parts[0]
-            is_suffixed = True
-        else:
-            for suffix in SUPPORTED_LANGUAGES:
-                if potential_set_id.endswith(suffix):
-                    potential_set_id = potential_set_id[:-len(suffix)]
-                    is_suffixed = True
+        # Check for language suffixes after extracting potential set ID
+        # First check if it ends with a language code (no space)
+        for suffix in SUPPORTED_LANGUAGES:
+            if potential_set_id.endswith(suffix) and len(potential_set_id) > len(suffix):
+                potential_set_id = potential_set_id[:-len(suffix)]
+                is_suffixed = True
+                break
+        
+        # Additional check: Look for set abbreviation followed by language code
+        # e.g., "SVIEN" -> "SVI" + "EN", "TWMEN" -> "TWM" + "EN"
+        if not is_suffixed:
+            for allowed_abbr in ALLOWED_SET_ABBREVIATIONS:
+                for suffix in SUPPORTED_LANGUAGES:
+                    combined = allowed_abbr + suffix
+                    if potential_set_id == combined or potential_set_id.startswith(combined):
+                        potential_set_id = allowed_abbr
+                        is_suffixed = True
+                        break
+                if is_suffixed:
                     break
         
         # Validation and scoring
@@ -115,18 +143,36 @@ def extract_card_info_from_text(detected_texts, card_database=None):
         for text in detected_texts:
             cleaned_text = str(text).upper().strip()
             
-            # Re-apply suffix stripping logic for each text
+            # Extract potential set ID from tokens
+            tokens = cleaned_text.split()
             potential_set_id = cleaned_text
+            
+            if len(tokens) > 1:
+                for token in tokens:
+                    if len(token) <= 1 or token.isdigit() or '/' in token:
+                        continue
+                    potential_set_id = token
+                    break
+            
             is_suffixed = False
-            parts = potential_set_id.split()
-            if len(parts) > 1 and parts[-1] in SUPPORTED_LANGUAGES:
-                potential_set_id = parts[0]
-                is_suffixed = True
-            else:
-                for suffix in SUPPORTED_LANGUAGES:
-                    if potential_set_id.endswith(suffix):
-                        potential_set_id = potential_set_id[:-len(suffix)]
-                        is_suffixed = True
+            
+            # Check for language suffixes
+            for suffix in SUPPORTED_LANGUAGES:
+                if potential_set_id.endswith(suffix) and len(potential_set_id) > len(suffix):
+                    potential_set_id = potential_set_id[:-len(suffix)]
+                    is_suffixed = True
+                    break
+            
+            # Check for concatenated set+language
+            if not is_suffixed:
+                for allowed_abbr in ALLOWED_SET_ABBREVIATIONS:
+                    for suffix in SUPPORTED_LANGUAGES:
+                        combined = allowed_abbr + suffix
+                        if potential_set_id == combined or potential_set_id.startswith(combined):
+                            potential_set_id = allowed_abbr
+                            is_suffixed = True
+                            break
+                    if is_suffixed:
                         break
             
             # Fuzzy comparison (1-character difference)
