@@ -93,16 +93,39 @@ def extract_card_info_from_text(detected_texts, card_database=None):
             num_candidates.append((2, cleaned_text.replace('O', '0')))
 
         # --- Set ID Logic ---
-        # First, try to extract a pattern like "H SFAEN" or "G SVIEN"
-        # Remove leading single letters and spaces
+        # Try to find set code in the same line as the number (XXX/YYY pattern)
+        if '/' in cleaned_text:
+            # Look for set code before the number/total pattern
+            # Pattern: "anything SET_CODE NUMBER/TOTAL"
+            tokens = cleaned_text.split()
+            for i, token in enumerate(tokens):
+                # Skip obvious non-set-code tokens
+                if len(token) <= 1 or token.isdigit() or token in ['-', 'G', 'H', 'SE', 'O']:
+                    continue
+                # Check if this token might contain a set code
+                # It could be concatenated with language code like "SVIEN"
+                potential_set_id = token
+                
+                # First check if it's an exact match with language suffix
+                for allowed_abbr in ALLOWED_SET_ABBREVIATIONS:
+                    for suffix in SUPPORTED_LANGUAGES:
+                        combined = allowed_abbr + suffix
+                        if potential_set_id == combined or potential_set_id.startswith(combined):
+                            set_candidates.append((1, allowed_abbr))
+                            break
+                    else:
+                        continue
+                    break
+        
+        # Original token-based extraction (for lines without /)
         tokens = cleaned_text.split()
         potential_set_id = cleaned_text
         
         # If we have multiple tokens, look for the set code pattern
         if len(tokens) > 1:
             for token in tokens:
-                # Skip single character tokens (H, G, etc.) and numbers
-                if len(token) <= 1 or token.isdigit() or '/' in token:
+                # Skip single character tokens (H, G, etc.), numbers, and separators
+                if len(token) <= 2 or token.isdigit() or '/' in token or token in ['-', 'SE', 'G', 'H', 'O']:
                     continue
                 # This could be our set code
                 potential_set_id = token
