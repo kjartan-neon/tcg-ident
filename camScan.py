@@ -17,7 +17,7 @@ WAIT_TIME_NO_TEXT = 3.0   # Wait time if OCR fails
 # --- Arduino/PyFirmata Configuration ---
 # IMPORTANT: Change this to your Arduino's serial port (e.g., 'COM3', '/dev/ttyACM0')
 # MUST USE pip install pyfirmata2 on newer pythons
-PORT = '/dev/cu.usbserial-1110'
+PORT = '/dev/cu.usbserial-1130'
 MOTOR_PIN = 8 
 MOTOR_RUN_TIME = 0.2      # Seconds the motor runs to move the card
 SETTLE_TIME = 0.5         # Time to wait after motor stops for card vibration to settle
@@ -149,7 +149,7 @@ def sort_card(servo, result_string):
         print("Forcing eject to Pile B due to scan failure.")
         is_pile_a = False
     # Check for 'fighting' type for Pile A sorting
-    elif 'fighting' in result_string.lower():
+    elif 'stadium' in result_string.lower():
         print(f"Card is a 'fighting' type. Sorting to Pile A.")
         is_pile_a = True
     else:
@@ -228,7 +228,16 @@ if __name__ == "__main__":
         else:
             print("Invalid choice. Please enter 'A' or 'M'.")
 
-    # --- 3. PyFirmata/Arduino Connection Attempt (only if needed) ---
+    # --- 3. Stop Card Configuration (only if autonomous mode) ---
+    stop_card_name = None
+    consecutive_stop_card_count = 0
+    if autonomous_mode:
+        stop_card_input = input("Enter stop card name (Pokemon name, leave empty to skip): ").strip()
+        if stop_card_input:
+            stop_card_name = stop_card_input
+            print(f"Stop card set to: '{stop_card_name}'. Script will exit after detecting it twice in a row.")
+    
+    # --- 4. PyFirmata/Arduino Connection Attempt (only if needed) ---
     board = None
     servo = None
     use_sorter = False
@@ -406,6 +415,23 @@ if __name__ == "__main__":
                 # --- SUCCESS ---
                 print(f"✅ IDENTIFIED: {result}")
                 
+                # --- Check for Stop Card ---
+                if autonomous_mode and stop_card_name:
+                    # Extract the card name from the result string to check for exact match
+                    if stop_card_name.lower() in result.lower():
+                        consecutive_stop_card_count += 1
+                        print(f"⚠️  Stop card detected! Count: {consecutive_stop_card_count}/2")
+                        
+                        if consecutive_stop_card_count >= 2:
+                            print(f"🛑 Stop card '{stop_card_name}' detected twice in a row. Exiting script.")
+                            # Sort the current card first if using sorter
+                            if use_sorter:
+                                sort_card(servo, result)
+                            break  # Exit the main loop
+                    else:
+                        # Reset counter if a different card is detected
+                        consecutive_stop_card_count = 0
+                
                 if autonomous_mode and use_sorter:
                     sort_card(servo, result)
                 
@@ -423,6 +449,10 @@ if __name__ == "__main__":
             else:
                 # --- FINAL FAILURE ---
                 print(f"❌ ALL SCAN ATTEMPTS FAILED. Last result: {result}.")
+                
+                # Reset stop card counter on failed scans
+                if autonomous_mode and stop_card_name:
+                    consecutive_stop_card_count = 0
                 
                 if autonomous_mode:
                     print("Ejecting card to Pile B.")
