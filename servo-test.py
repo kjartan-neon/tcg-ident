@@ -2,7 +2,7 @@ from pyfirmata2 import Arduino, SERVO
 import sys
 
 # --- CONFIGURATION ---
-port = '/dev/cu.usbserial-1110'
+port = '/dev/cu.usbserial-130'
 servo_pin = 9  # Ensure your servo is on Pin 9
 
 # --- SETUP ---

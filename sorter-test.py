@@ -22,7 +22,7 @@ import serial
 import time
 import sys
 
-PORT        = '/dev/cu.usbserial-A600b29u'
+PORT        = '/dev/cu.usbserial-130'
 BAUD        = 115200
 CART2_STEPS   = 1640
 DEFAULT_DELAY = 2200
