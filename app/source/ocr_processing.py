@@ -53,18 +53,26 @@ def find_card_in_database(set_id, card_number, card_database):
     return None
 
 
-def extract_card_info_from_text(detected_texts, card_database=None):
+def extract_card_info_from_text(detected_texts, card_database=None,
+                                allowed_abbreviations=None):
     """Extract set ID and card number from a list of OCR text strings.
 
     OCR output is noisy — words may be split, merged, or garbled. This
     function uses a priority-scoring system: each candidate gets a numeric
     preference score (lower = better), and we take the best-scoring one.
 
+    `allowed_abbreviations` controls which set IDs are considered valid.
+    Defaults to the module-level ALLOWED_SET_ABBREVIATIONS list when None.
+
     Stage 1 — find all candidates and assign priority scores.
     Stage 1b — fuzzy fallback if no exact set ID was found.
     Stage 2 — pick the highest-priority candidate from each group.
     Stage 3 — look up the card in the database and format the result.
     """
+    # Use the caller-supplied list, or fall back to the module default
+    _allowed = allowed_abbreviations if allowed_abbreviations is not None \
+               else ALLOWED_SET_ABBREVIATIONS
+
     set_id = None
     card_number = None
 
@@ -114,7 +122,7 @@ def extract_card_info_from_text(detected_texts, card_database=None):
                     continue
                 potential_set_id = token
                 # Check if the token is exactly "ABBR+LANG" (e.g. "SVIEN")
-                for allowed_abbr in ALLOWED_SET_ABBREVIATIONS:
+                for allowed_abbr in _allowed:
                     for suffix in SUPPORTED_LANGUAGES:
                         combined = allowed_abbr + suffix
                         if potential_set_id == combined or potential_set_id.startswith(combined):
@@ -147,7 +155,7 @@ def extract_card_info_from_text(detected_texts, card_database=None):
 
         # Handle the concatenated form (e.g. "TWMEN" → "TWM")
         if not is_suffixed:
-            for allowed_abbr in ALLOWED_SET_ABBREVIATIONS:
+            for allowed_abbr in _allowed:
                 for suffix in SUPPORTED_LANGUAGES:
                     combined = allowed_abbr + suffix
                     if potential_set_id == combined or potential_set_id.startswith(combined):
@@ -158,7 +166,7 @@ def extract_card_info_from_text(detected_texts, card_database=None):
                     break
 
         # Only accept candidates that exactly match a known abbreviation
-        if potential_set_id in ALLOWED_SET_ABBREVIATIONS:
+        if potential_set_id in _allowed:
             # A language suffix is evidence the OCR read the whole token correctly
             if is_suffixed:
                 set_candidates.append((1, potential_set_id))  # high confidence
@@ -191,7 +199,7 @@ def extract_card_info_from_text(detected_texts, card_database=None):
                     break
 
             if not is_suffixed:
-                for allowed_abbr in ALLOWED_SET_ABBREVIATIONS:
+                for allowed_abbr in _allowed:
                     for suffix in SUPPORTED_LANGUAGES:
                         combined = allowed_abbr + suffix
                         if potential_set_id == combined or potential_set_id.startswith(combined):
@@ -203,7 +211,7 @@ def extract_card_info_from_text(detected_texts, card_database=None):
 
             # Count character-position differences between the candidate and
             # each known abbreviation. Accept if exactly 1 position differs.
-            for allowed_abbr in ALLOWED_SET_ABBREVIATIONS:
+            for allowed_abbr in _allowed:
                 if len(potential_set_id) == len(allowed_abbr):
                     diff = sum(c1 != c2 for c1, c2 in zip(potential_set_id, allowed_abbr))
                     if diff == 1:

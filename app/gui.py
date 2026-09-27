@@ -60,6 +60,7 @@ def _find_db() -> str:
 
 from serial_controller import SorterController
 from scanner import CardScanner
+from card_db_builder import build_database, get_set_abbreviations_from_db
 
 # ── Colour palette ────────────────────────────────────────────────────────────
 C_BG      = '#f0e6ff'
@@ -72,6 +73,7 @@ C_TEXT    = '#1e1b30'
 C_MUTED   = '#7060a0'
 C_ACCENT  = '#7c3aed'
 C_SUCCESS = '#10b981'
+C_WARN    = '#f59e0b'
 
 C_ACC     = '#7c3aed'
 C_ACC_H   = '#6d28d9'
@@ -223,6 +225,10 @@ class App(tk.Tk):
         self._save_timer_id          = None
         self._pulsing:   set = set()
         self._pulse_phase: int = 0
+        # tcgdex source folder path (used by the Build Database section)
+        self._tcgdex_data_v = tk.StringVar(value=self._default_tcgdex_path())
+        # Set filter selections to restore after the database loads
+        self._pending_set_filter: Optional[list] = None
 
         self._apply_theme()
         self._build_ui()
@@ -232,6 +238,14 @@ class App(tk.Tk):
         self._tick_camera()
         self._update_conn_indicators()
         self.protocol('WM_DELETE_WINDOW', self._on_close)
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _default_tcgdex_path(self) -> str:
+        """Best-guess default for the tcgdex data/ folder."""
+        # Check the conventional location: <project_root>/tcgdex/data
+        candidate = os.path.join(APP_DIR, '..', 'tcgdex', 'data')
+        return os.path.abspath(candidate)
 
     # ── Settings persistence ──────────────────────────────────────────────────
 
@@ -266,6 +280,8 @@ class App(tk.Tk):
             'scan_retries':  self._retries_v.get(),
             'crop_region':   list(self._scanner.crop_region)
                              if self._scanner.crop_region else None,
+            'tcgdex_data_path': self._tcgdex_data_v.get(),
+            'allowed_set_abbreviations': self._scanner.allowed_abbreviations,
             'cart_criteria': {
                 str(n): {
                     'field':  self._cart_field_v[n].get()
@@ -340,6 +356,15 @@ class App(tk.Tk):
             if n in self._cart_field_v:
                 self._cart_field_v[n].set(v.get('field', 'types'))
 
+        _sv(self._tcgdex_data_v, 'tcgdex_data_path')
+
+        # Restore the saved allowed-set-abbreviations list.  Like cart criteria,
+        # we can't apply the listbox selection until the db loads, so store it.
+        saved_abbrs = data.get('allowed_set_abbreviations')
+        if isinstance(saved_abbrs, list):
+            self._scanner.allowed_abbreviations = saved_abbrs
+            self._pending_set_filter = saved_abbrs
+
         self._log('Settings loaded.')
 
     def _restore_crop_overlay(self, cr: list):
@@ -357,7 +382,8 @@ class App(tk.Tk):
                     self._servo_open_v, self._servo_close_v, self._step_size_v,
                     self._delay_v, self._servo_v, self._stepn_v, self._cycles_v,
                     self._settle_v, self._drop_wait_v, self._auto_retries_v,
-                    self._retries_v, self._not_found_cart_v, self._cur_cart_v):
+                    self._retries_v, self._not_found_cart_v, self._cur_cart_v,
+                    self._tcgdex_data_v):
             var.trace_add('write', self._schedule_save)
         for fv in self._cart_field_v.values():
             fv.trace_add('write', self._schedule_save)
@@ -904,6 +930,82 @@ class App(tk.Tk):
                    buttonbackground=C_NEU).pack(side='left')
         ttk.Label(nff, text='fallback for unmatched cards',
                   style='Muted.TLabel').pack(side='left', padx=8)
+
+        # ── Build Database ────────────────────────────────────────────────────
+        r = self._section(p, 'Build Database', r)
+
+        # Multi-line instructions — wraplength keeps it from overflowing the panel
+        instr = (
+            "To build the card database you need the tcgdex cards-database "
+            "repository. Clone or download it from GitHub, then point the "
+            "folder picker below at its data/ subfolder and click Build."
+        )
+        ttk.Label(p, text=instr, style='Muted.TLabel', wraplength=300,
+                  justify='left').grid(
+            row=r, column=0, sticky='w', padx=4, pady=(0, 6)); r += 1
+
+        ttk.Label(p, text='github.com/tcgdex/cards-database',
+                  foreground=C_ACCENT, font=FONT_SMALL).grid(
+            row=r, column=0, sticky='w', padx=4, pady=(0, 8)); r += 1
+
+        # tcgdex data/ folder picker
+        tf = ttk.Frame(p)
+        tf.grid(row=r, column=0, sticky='ew', padx=4, pady=2); r += 1
+        tf.columnconfigure(0, weight=1)
+        ttk.Label(tf, text='tcgdex data/ folder:').grid(
+            row=0, column=0, sticky='w', pady=(0, 2), columnspan=2)
+        ttk.Entry(tf, textvariable=self._tcgdex_data_v).grid(
+            row=1, column=0, sticky='ew', padx=(0, 4))
+        _nbtn(tf, '…', self._browse_tcgdex).grid(row=1, column=1)
+
+        # Output path — mirrors the db path from the Connect tab
+        ttk.Label(p, text='Output: same as database path in Connect tab',
+                  style='Muted.TLabel').grid(
+            row=r, column=0, sticky='w', padx=4, pady=(4, 2)); r += 1
+
+        self._build_status_lbl = ttk.Label(p, text='', foreground=C_MUTED,
+                                            wraplength=300, justify='left')
+        self._build_status_lbl.grid(row=r, column=0, sticky='w', padx=4); r += 1
+
+        r = self._rbf(p, r, ('Build Database', self._build_card_db, 'accent'))
+
+        # ── Active Set Filters ────────────────────────────────────────────────
+        r = self._section(p, 'Active Set Filters', r)
+
+        ttk.Label(
+            p,
+            text=('Select which sets the OCR should recognise. '
+                  'Deselect sets you do not own to reduce false positives. '
+                  'Populated automatically when a database is loaded.'),
+            style='Muted.TLabel', wraplength=300, justify='left',
+        ).grid(row=r, column=0, sticky='w', padx=4, pady=(0, 4)); r += 1
+
+        # Select All / Deselect All convenience buttons
+        btnf = ttk.Frame(p)
+        btnf.grid(row=r, column=0, sticky='w', padx=4, pady=(0, 4)); r += 1
+        _nbtn(btnf, 'Select All',   self._select_all_sets).pack(side='left', padx=(0, 4))
+        _nbtn(btnf, 'Deselect All', self._deselect_all_sets).pack(side='left')
+
+        # Multi-select listbox for set abbreviations
+        sf = ttk.Frame(p)
+        sf.grid(row=r, column=0, sticky='ew', padx=4, pady=(0, 8)); r += 1
+        sf.columnconfigure(0, weight=1)
+        self._set_filter_lb = tk.Listbox(
+            sf, selectmode=tk.MULTIPLE, height=8,
+            exportselection=False, font=FONT_MONO,
+            bg=C_INPUT, fg=C_TEXT,
+            selectbackground=C_ACC, selectforeground='white',
+            relief='flat', borderwidth=0,
+            highlightthickness=1, highlightbackground=C_BORDER,
+        )
+        sf_sb = ttk.Scrollbar(sf, orient='vertical',
+                               command=self._set_filter_lb.yview)
+        self._set_filter_lb.configure(yscrollcommand=sf_sb.set)
+        self._set_filter_lb.grid(row=0, column=0, sticky='ew')
+        sf_sb.grid(row=0, column=1, sticky='ns')
+        # Sync scanner whenever the user changes the selection
+        self._set_filter_lb.bind(
+            '<<ListboxSelect>>', lambda _: self._sync_allowed_abbreviations())
 
     # ── Tab: Sort & Scan ──────────────────────────────────────────────────────
 
@@ -1531,6 +1633,114 @@ class App(tk.Tk):
         if path:
             self._db_v.set(path)
 
+    def _browse_tcgdex(self):
+        """Open a folder-chooser for the tcgdex data/ directory."""
+        folder = filedialog.askdirectory(
+            title='Select tcgdex data/ folder',
+            initialdir=self._tcgdex_data_v.get(),
+        )
+        if folder:
+            self._tcgdex_data_v.set(folder)
+
+    def _build_card_db(self):
+        """Build card_data_lookup.json from the selected tcgdex folder.
+
+        Runs build_database() in a background thread so the GUI stays
+        responsive during the (potentially slow) file walk.  Progress
+        messages are fed into the build status label via self.after(0, …).
+        """
+        input_folder = self._tcgdex_data_v.get().strip()
+        output_path  = self._db_v.get().strip()
+
+        if not input_folder:
+            self._build_status_lbl.config(
+                text='⚠ Set the tcgdex data/ folder first.', foreground=C_WARN)
+            return
+        if not output_path:
+            self._build_status_lbl.config(
+                text='⚠ Set the database output path in the Connect tab first.',
+                foreground=C_WARN)
+            return
+
+        self._build_status_lbl.config(text='Building…', foreground=C_MUTED)
+
+        def _run():
+            def _progress(msg: str):
+                self.after(0, lambda m=msg:
+                    self._build_status_lbl.config(text=m, foreground=C_MUTED))
+
+            ok, num_cards, num_sets = build_database(
+                input_folder, output_path, on_progress=_progress)
+
+            if ok:
+                def _done():
+                    self._build_status_lbl.config(
+                        text=f'✓ Built: {num_cards:,} cards, {num_sets} sets',
+                        foreground=C_SUCCESS)
+                    # Auto-load the freshly built database and refresh the UI
+                    self._load_db()
+                self.after(0, _done)
+            else:
+                self.after(0, lambda:
+                    self._build_status_lbl.config(
+                        text='✗ Build failed — check the log for details.',
+                        foreground='#ef4444'))
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _populate_set_filter(self):
+        """Fill the set-filter listbox from the loaded database.
+
+        Called after every database load or build.  If `_pending_set_filter`
+        was restored from settings, those abbreviations are pre-selected and
+        the pending list is cleared so future refreshes preserve user picks.
+        """
+        if not hasattr(self, '_set_filter_lb'):
+            return  # Tab not yet built (can happen during early init)
+        lb = self._set_filter_lb
+
+        db = getattr(self._scanner, '_db', None)
+        if not db:
+            return
+
+        from card_db_builder import get_set_abbreviations_from_db
+        abbreviations = get_set_abbreviations_from_db(db)
+
+        pending = self._pending_set_filter  # list or None
+        if pending is not None:
+            to_select = set(pending)
+            self._pending_set_filter = None  # consumed — don't re-apply
+        else:
+            # Preserve whatever the user currently has highlighted
+            to_select = {lb.get(i) for i in lb.curselection()}
+
+        lb.delete(0, 'end')
+        for abbr in abbreviations:
+            lb.insert('end', abbr)
+            if abbr in to_select:
+                lb.selection_set(lb.size() - 1)
+
+        # If nothing is selected yet (first load, no saved filter), select all
+        if not lb.curselection():
+            lb.selection_set(0, 'end')
+
+        self._sync_allowed_abbreviations()
+
+    def _sync_allowed_abbreviations(self):
+        """Push the listbox selection to scanner.allowed_abbreviations and save."""
+        lb = self._set_filter_lb
+        selected = [lb.get(i) for i in lb.curselection()]
+        self._scanner.allowed_abbreviations = selected
+        self._schedule_save()
+
+    def _select_all_sets(self):
+        self._set_filter_lb.selection_set(0, 'end')
+        self._sync_allowed_abbreviations()
+
+    def _deselect_all_sets(self):
+        self._set_filter_lb.selection_clear(0, 'end')
+        self._sync_allowed_abbreviations()
+
     def _load_db(self):
         self._db_status_lbl.config(text='● Loading…', foreground=C_MUTED)
         self._scanner.load_database(self._db_v.get())
@@ -1539,6 +1749,7 @@ class App(tk.Tk):
             if self._scanner.database_loaded:
                 self._db_status_lbl.config(text='● Loaded', foreground=C_SUCCESS)
                 self._refresh_criteria_lists()
+                self._populate_set_filter()
             else:
                 self._db_status_lbl.config(text='● Failed', foreground='#9ca3af')
 

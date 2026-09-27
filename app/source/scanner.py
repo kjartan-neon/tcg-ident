@@ -15,7 +15,8 @@ import time
 from typing import Callable, Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(__file__))
-from ocr_processing import extract_card_info_from_text, find_card_in_database
+from ocr_processing import (extract_card_info_from_text, find_card_in_database,
+                             ALLOWED_SET_ABBREVIATIONS)
 
 
 class CardScanner:
@@ -30,6 +31,10 @@ class CardScanner:
         self._card_count: int = 0       # Number of cards in the loaded database
         self._doctr_loaded: bool = False   # Set after DocTR loads successfully
         self._paddle_loaded: bool = False  # Set after Paddle loads successfully
+        # The set abbreviations the OCR is allowed to match.
+        # Starts as the full default list; the GUI narrows it to whatever
+        # the user selects in the Active Set Filters panel.
+        self._allowed_abbreviations: list = list(ALLOWED_SET_ABBREVIATIONS)
         # Crop region in normalised 0–1 coordinates: (x1, y1, x2, y2).
         # Stored as a fraction of the frame size so the crop stays correct
         # when the window or camera resolution changes.
@@ -49,6 +54,16 @@ class CardScanner:
     @crop_region.setter
     def crop_region(self, value: Optional[Tuple[float, float, float, float]]):
         self._crop_region = value
+
+    # ── Allowed set abbreviations ─────────────────────────────────────────────
+
+    @property
+    def allowed_abbreviations(self) -> list:
+        return self._allowed_abbreviations
+
+    @allowed_abbreviations.setter
+    def allowed_abbreviations(self, value: list):
+        self._allowed_abbreviations = list(value)
 
     # ── Model / database loading ─────────────────────────────────────────────
 
@@ -200,7 +215,8 @@ class CardScanner:
                         t = ' '.join(w.value for w in line.words).strip()
                         if t:
                             texts.append(t)
-            info = extract_card_info_from_text(texts, self._db)
+            info = extract_card_info_from_text(texts, self._db,
+                                               self._allowed_abbreviations)
             return info if "FAILED" not in info else None
         except Exception as e:
             self._emit(f"DocTR scan error: {e}")
@@ -221,7 +237,8 @@ class CardScanner:
                     texts = obj.rec_texts
                 elif isinstance(obj, dict) and 'rec_texts' in obj:
                     texts = obj['rec_texts']
-            info = extract_card_info_from_text(texts, self._db)
+            info = extract_card_info_from_text(texts, self._db,
+                                               self._allowed_abbreviations)
             return f"{info} [Paddle]" if "FAILED" not in info else None
         except Exception as e:
             self._emit(f"PaddleOCR error: {e}")

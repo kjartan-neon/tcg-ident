@@ -10,7 +10,7 @@
   "servo_manual": "90",
   "step_n": "100",
   "cycles": "1",
-  "current_cart": 1,
+  "current_cart": 2,
   "not_found_cart": 3,
   "settle": "1.0",
   "drop_wait": "2.0",
@@ -21,6 +21,29 @@
     0.15831663326653306,
     0.3992297817715019,
     0.6352705410821643
+  ],
+  "tcgdex_data_path": "/Users/kjartan.bjorndal.michalsen/Documents/GitHub/tcg-ident/tcgdex/data",
+  "allowed_set_abbreviations": [
+    "BLK",
+    "DRI",
+    "JTG",
+    "MEG",
+    "MEP",
+    "MEW",
+    "OBF",
+    "PAF",
+    "PAL",
+    "PAR",
+    "PFL",
+    "PRE",
+    "SCR",
+    "SFA",
+    "SSP",
+    "SVI",
+    "SVP",
+    "TEF",
+    "TWM",
+    "WHT"
   ],
   "cart_criteria": {
     "1": {
