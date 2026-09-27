@@ -10,11 +10,12 @@ Commands:
   c1                 return to cart-1 position
   stop               halt stepper mid-move
   rel                release / de-energise stepper coils
-  delay <us>         set step delay in microseconds (default 2200, try lower)
+  delay <us>         set step delay in microseconds (default 3600, try lower)
   set steps <n>      set cart-2 step count
   feed               pulse card feeder relay (200 ms)
   ping               check connection
   cycle <pos> <n>    repeat c1↔c2 n times; pos = current position (1 or 2)
+  fullcycle [n]      full sort cycle: servo 155 → feed → f 1180 → servo 80 → wait → servo 155 → feed → b 1180 → servo 80 → wait (repeat n times)
   q                  quit
 """
 
@@ -24,8 +25,8 @@ import sys
 
 PORT        = '/dev/cu.usbserial-130'
 BAUD        = 115200
-CART2_STEPS   = 1640
-DEFAULT_DELAY = 2200
+CART2_STEPS   = 870
+DEFAULT_DELAY = 3600
 
 # --- Connect ---
 print(f"Connecting to {PORT} at {BAUD} baud...")
@@ -142,6 +143,46 @@ try:
 
         elif cmd == 'ping':
             print(send("PING"))
+
+        elif cmd == 'fullcycle':
+            n_cycles = int(parts[1]) if len(parts) > 1 else 1
+            print(f"Full cycle test: {n_cycles} cycle(s).")
+            for i in range(1, n_cycles + 1):
+                print(f"\n--- Cycle {i}/{n_cycles} ---")
+
+                print("  servo 155...", end=' ', flush=True)
+                print(send("SERVO 155"))
+
+                print("  feed...", end=' ', flush=True)
+                print(send("FEED"))
+
+                print("  f 1180...", end=' ', flush=True)
+                print(send("STEP 1740"))
+                wait_done()
+
+                print("  servo 80...", end=' ', flush=True)
+                print(send("SERVO 50"))
+
+                print("  waiting 3s for card to drop...")
+                time.sleep(3)
+
+                print("  servo 155...", end=' ', flush=True)
+                print(send("SERVO 155"))
+
+                print("  feed...", end=' ', flush=True)
+                print(send("FEED"))
+
+                print("  b 1180...", end=' ', flush=True)
+                print(send("STEP -1740"))
+                wait_done()
+
+                print("  servo 80...", end=' ', flush=True)
+                print(send("SERVO 50"))
+
+                print("  waiting 3s for card to drop...")
+                time.sleep(3)
+
+            print(f"\nFull cycle test done. {n_cycles} cycle(s) completed.")
 
         elif cmd == 'cycle':
             if len(parts) < 3:

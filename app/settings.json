@@ -1,0 +1,41 @@
+{
+  "port": "/dev/cu.usbserial-130",
+  "baud": "115200",
+  "cam_idx": "0",
+  "db_path": "/Users/kjartan.bjorndal.michalsen/Documents/GitHub/tcg-ident/card_data_lookup.json",
+  "servo_open": "50",
+  "servo_close": "179",
+  "step_size": "870",
+  "step_delay": "3600",
+  "servo_manual": "90",
+  "step_n": "100",
+  "cycles": "1",
+  "current_cart": 1,
+  "not_found_cart": 3,
+  "settle": "1.0",
+  "drop_wait": "2.0",
+  "auto_retries": "5",
+  "scan_retries": "5",
+  "crop_region": [
+    0.005134788189987163,
+    0.15831663326653306,
+    0.3992297817715019,
+    0.6352705410821643
+  ],
+  "cart_criteria": {
+    "1": {
+      "field": "category",
+      "values": [
+        "Stadium"
+      ]
+    },
+    "2": {
+      "field": "types",
+      "values": []
+    },
+    "3": {
+      "field": "types",
+      "values": []
+    }
+  }
+}

@@ -1,228 +1,145 @@
-# 🃏 TCG Identifier
+# Scramble Switch Sorter
 
-**TCG Identifier** is a Python-based tool for automatically identifying Pokémon Trading Card Game (TCG) cards from images or a live webcam feed. It uses computer vision to detect and isolate the card from its background and Optical Character Recognition (OCR) to extract key information like the set ID and card number. It supports all sets that have a *3 letter identification*, and uses OCR to find the card's name after looking up in a comprehensive card database.
+A desktop GUI for automatically identifying and physically sorting Pokémon TCG cards. The app controls a serial-connected Arduino sorter, a webcam, and two OCR engines from a single interface.
 
-## 🤖 Automated Card Feeder & Sorter (Arduino Integration)
+Supports all sets that use a 3-letter set ID (Scarlet & Violet and onwards), which is read from the bottom of each card alongside the card number. Cards are matched against a local JSON database and routed to one of three physical sort carts.
 
-The `camScan.py` script includes **innovative hardware automation** for high-speed card scanning and sorting using an Arduino-controlled system:
+---
 
-### 🔄 Automated Card Feeding
-*   **Motor Control**: Arduino-controlled motor feeds cards one at a time into the scanning area
-*   **Precise Timing**: Configurable motor run time and settle time for consistent positioning
-*   **Autonomous Mode**: Continuous scanning with automatic card feeding after each identification
+## Features
 
-### 🎯 Intelligent Card Sorting
-*   **Dual-Pile Sorting**: Servo motor sorts cards into two separate piles (A and B) based on identification results
-*   **Intermediate Positioning**: Uses intermediate servo positions for smooth, reliable card sorting
-*   **Customizable Sort Logic**: Easily configure sorting rules based on card type, set, or any other attribute
-*   **Failure Handling**: Failed scans automatically sorted to Pile B
+- **Sort & Scan automation** — feed, scan, identify, and sort cards continuously with configurable timing and retries
+- **Three-cart sorting** — assign sets, types, or categories to each cart; unmatched cards fall back to a configurable default cart
+- **Live camera feed** with drag-to-set OCR crop area
+- **Dual OCR engines** — DocTR (primary, fast CPU inference) with PaddleOCR fallback
+- **Connection status panel** — one-click "Connect All" with per-item pulsing indicator during setup, and detail readout (port, resolution, model names, card count) once connected
+- **Settings persistence** — all configuration auto-saves and restores between sessions
+- **macOS app bundle** via PyInstaller; releases built automatically by GitHub Actions on version tags
 
-### 🔧 Smart Retry with Wiggle Feature
-*   **Wiggle Mechanism**: If OCR fails, the servo wiggles the card to improve positioning
-*   **Multi-Attempt Scanning**: 
-    - 5 initial scan attempts with fresh frames
-    - 3 additional wiggle-and-retry attempts if needed
-    - Dual OCR engine fallback (DocTR → PaddleOCR)
-*   **Adaptive Strategy**: Combines hardware movement with software retries for maximum success rate
+---
 
-### 📊 Stop Card Detection
-*   **Auto-Stop Feature**: Configure a "stop card" (e.g., specific Pokémon name)
-*   **Consecutive Detection**: Requires detecting the stop card twice in a row to prevent false positives
-*   **Batch Processing**: Perfect for scanning entire decks or collections with a known end marker
+## Tabs
 
-### 🎮 Dual Operating Modes
-1. **Autonomous Mode**: Fully automated feeding, scanning, and sorting
-2. **Manual Mode**: Press 'n' to trigger scans on-demand (no Arduino required)
+### Sort & Scan
+Main control tab. Shows connection indicators for serial, camera, OCR, and database. "Connect All" attempts all four connections simultaneously and pulses blue while each is in progress. Start and stop the automated sort-and-scan loop here, and track cards sorted.
 
-**Hardware Requirements**: Arduino board, servo motor (pin 9), DC motor/relay (pin 8), webcam
+### Sort Settings
+Assign sorting rules per cart. For each of the three carts, pick a field (types, category, set) and select the values that should route to that cart. Multiple selections use Ctrl+click.
 
-## ✨ Features
+### Connect
+Manual connection controls for each subsystem independently — serial port, camera index, OCR model loading, and database file path. Includes port and camera discovery buttons.
 
-*   **Robust Card Detection:** Locates cards in images, even against complex backgrounds.
-*   **Perspective Correction:** Applies a four-point perspective transform to "flatten" the card for accurate analysis.
-*   **Targeted OCR:** Crops the card image to the bottom section where the set ID and number are typically located, improving OCR accuracy.
-*   **Card Verification:** Looks up the extracted set ID and card number in a generated JSON database to find the card's name.
-*   **Dual OCR Engine System:** DocTR (fast) with automatic PaddleOCR fallback for maximum accuracy.
-*   **Multiple Scan Modes:**
-    *   `pictureScan.py`: Scans a directory of card images using DocTR (fast) with PaddleOCR fallback (recommended).
-    *   `pictureScan-paddleocr.py`: Scans a directory of card images using PaddleOCR only.
-    *   `pictureScan-surya.py`: Scans a directory of card images using Surya OCR only.
-    *   `camScan.py`: Scans for cards using a live webcam feed with DocTR (fast) and PaddleOCR fallback, with optional Arduino automation.
+### Sorter
+Low-level hardware controls: gate servo angles, stepper step size and delay, manual cart movement, feed/stop/release, and multi-cycle test runs.
 
-## ⚙️ Setup and Installation
+### Scanner
+Crop area controls and on-demand scan testing. Drag on the camera feed to set the OCR region, or clear it to use the full frame. Scan Card Now and Scan & Identify Cart let you test recognition without running the full loop.
 
-Follow these steps to set up the project and its dependencies.
+---
 
-### 1. Clone the Repository
+## Hardware
 
-First, clone this repository to your local machine:
+| Component | Details |
+|-----------|---------|
+| Arduino (or compatible) | Connected via USB serial; runs a custom firmware that accepts simple serial commands |
+| Stepper motor | Moves the three-cart tray; step size and delay are configurable |
+| Servo motor | Opens and closes the card drop gate |
+| Webcam | Any USB or built-in camera; index selectable in the Connect tab |
+
+The app communicates over serial at a configurable baud rate (default 115200). Use the Connect tab to scan for ports and select the correct one.
+
+---
+
+## Setup
+
+### 1. Clone the repository
 
 ```bash
 git clone <repository-url>
 cd tcg-ident
 ```
 
-### 2. Install Python Dependencies
-
-It is highly recommended to use a virtual environment.
+### 2. Create a virtual environment
 
 ```bash
 python3 -m venv env
 source env/bin/activate
 ```
 
-This project requires several Python libraries. While a `requirements.txt` is not provided, you can install the necessary packages using pip:
+### 3. Install Python dependencies
 
 ```bash
-pip install opencv-python numpy
-```
-
-### 3. Install OCR Engine
-
-This project supports three OCR engines:
-
-#### Option A: PaddleOCR
-
-This is used by `pictureScan-paddleocr.py` and `camScan.py` (fallback). Install PaddlePaddle and PaddleOCR:
-
-```bash
-# Install PaddlePaddle (CPU version recommended for simplicity)
-pip install paddlepaddle
-
-# Install PaddleOCR
-pip install paddleocr
-```
-*Note: PaddleOCR will automatically download the necessary detection and recognition models the first time it runs.*
-
-#### Option B: DocTR with MobileNet (Recommended - Fast & Accurate)
-
-This is used by `pictureScan.py` and `camScan.py` (primary). DocTR with MobileNet models provides the best balance of speed and accuracy for CPU-based scanning:
-
-```bash
-# Install DocTR with PyTorch backend
+pip install opencv-python pillow pyserial cairosvg
 pip install python-doctr[torch]
+pip install paddlepaddle paddleocr
 ```
-*Note: DocTR uses lightweight MobileNet architectures that are optimized for CPU inference. Models download automatically on first run. This is the recommended option for fast card identification.*
 
-**Dual-Engine Mode**: Both `pictureScan.py` and `camScan.py` use DocTR as the primary (fast) engine and automatically fall back to PaddleOCR if DocTR fails to identify a card. For best results, install both engines.
+PaddleOCR is optional but recommended — the app loads it as a fallback. DocTR and Paddle models download automatically on first use.
 
-#### Option C: Surya OCR (Alternative - Slower but Accurate)
+### 4. Prepare the card database
 
-This is used by `pictureScan-surya.py`. Install the specific version that works correctly:
+The app looks up identified cards in a local JSON file (`card_data_lookup.json`).
+
+1. Clone or download the [tcgdex/cards-database](https://github.com/tcgdex/cards-database) repository.
+2. Create a `tcgdex/data/` folder in this project and copy the set data folders into it.
+   See [`tcgdex/readme.md`](tcgdex/readme.md) for details.
+3. Generate the lookup file:
+
+   ```bash
+   python3 get-card-data.py
+   ```
+
+This produces `card_data_lookup.json` in the project root. Point the app to it via the Connect tab's database path field (it auto-detects if the file is in the project root).
+
+### 5. Run the app
 
 ```bash
-# Install Surya OCR version 0.16.0 (version 0.17.1+ has compatibility issues)
-pip install surya-ocr==0.16.0
-```
-*Note: Surya OCR will automatically download models on first run. It requires more disk space and memory than other engines and is slower on CPU, but may provide better accuracy for challenging text recognition tasks.*
-
-### 4. Prepare the Card Database
-
-The script can verify the identified card against a comprehensive card database from **tcgdex**. To make it faster and usable for python, a script reads the data and extract the needed content, and then saves as a .json that can be used by python.
-
-1.  **Download the Database:** Download the latest card data from the [tcgdex/cards-database](https://github.com/tcgdex/cards-database) repository. You can either clone it or download it as a ZIP file.
-
-2.  **Organize Data:**
-    *   Create a folder named `tcgdex` in the root of this project if it doesn't exist.
-    *   Inside `tcgdex`, create a folder named `data`.
-    *   Copy the downloaded card data folders for Scarlet & Violet and Mega Evolution into the `tcgdex/data/` directory.
-    *   Only these and future sets with 3 letter card identification is usable for this method of identification.
-
-3.  **Generate the Lookup File:** Run the `get-card-data.py` script to process the raw data into a single, optimized JSON file (`card_data_lookup.json`) that the main scanning scripts use.
-
-    ```bash
-    python3 get-card-data.py
-    ```
-
-## 🚀 Usage
-
-### Scanning from Image Files
-
-1.  Place your card images (e.g., `.jpg`, `.png`) into the `photos` folder.
-2.  Run the scanning script depending on which OCR engine you installed:
-
-    **Using DocTR + PaddleOCR (recommended - fast with fallback):**
-    ```bash
-    python3 pictureScan.py
-    ```
-    
-    **Using PaddleOCR only:**
-    ```bash
-    python3 pictureScan-paddleocr.py
-    ```
-    
-    **Using Surya OCR (slower, alternative):**
-    ```bash
-    python3 pictureScan-surya.py
-    ```
-
-3.  The script will prompt you to:
-    *   Use the default `photos` directory or specify a different one
-    *   Choose a cropping mode (corner crop, detect crop, or full image)
-
-### Scanning from Webcam
-
-#### Basic Usage (Manual Mode - No Arduino Required)
-
-1.  Ensure you have a webcam connected.
-2.  Run the `camScan.py` script:
-
-    ```bash
-    python3 camScan.py
-    ```
-
-3.  Select **Manual Mode** when prompted.
-4.  Position a card in front of the webcam and press **'n'** to scan.
-5.  The script will display the identified card information.
-
-#### Advanced Usage (Autonomous Mode with Arduino)
-
-**Hardware Setup:**
-*   Arduino board connected via USB (update `PORT` variable in script)
-*   DC motor or relay connected to pin 8 (card feeder)
-*   Servo motor connected to pin 9 (card sorter)
-*   Webcam positioned to capture card area
-
-**Configuration Variables** (in `camScan.py`):
-```python
-PORT = '/dev/cu.usbserial-1130'        # Arduino serial port
-MOTOR_PIN = 8                          # Card feeder motor pin
-MOTOR_RUN_TIME = 0.2                   # Motor activation duration (seconds)
-SETTLE_TIME = 0.5                      # Wait time for card to settle
-SERVO_PIN = 9                          # Card sorter servo pin
-SORTER_CENTER_POS = 23                 # Servo center position (degrees)
-SORTER_PILE_A_POS = 1                  # Pile A final position
-SORTER_PILE_B_POS = 46                 # Pile B final position
-SORTER_PILE_A_INTERMEDIATE_POS = 33    # Pile A intermediate position
-SORTER_PILE_B_INTERMEDIATE_POS = 11    # Pile B intermediate position
+python3 app/main.py
 ```
 
-**Running Autonomous Mode:**
+---
 
-1.  Connect Arduino and verify port settings
-2.  Run the script:
-    ```bash
-    python3 camScan.py
-    ```
+## Building a macOS app bundle
 
-3.  Select **Autonomous Mode** when prompted
-4.  (Optional) Enter a stop card name to auto-stop after detecting it twice
-5.  Choose whether to use the card sorter
-6.  The system will:
-    - Automatically feed cards one at a time
-    - Scan each card with 5 attempts
-    - Use wiggle feature if initial scans fail
-    - Sort cards into piles based on identification
-    - Continue until stopped or stop card is detected
+```bash
+bash scripts/build_macos.sh
+```
 
-**Sorting Logic:**
-*   Customize the `sort_card()` function to define sorting rules
-*   Default: sorts by card type (easily modifiable)
-*   Failed scans automatically go to Pile B
+Requires PyInstaller and the Python dependencies above. Produces a `.zip` containing the `.app` bundle in `dist/`.
 
-**Wiggle Feature:**
-*   Activates after 5 failed scan attempts
-*   Performs 3 additional scan attempts with card repositioning
-*   Servo wiggles ±10° from center to improve OCR angle
+GitHub Actions builds and attaches the zip to a release automatically when a `v*` tag is pushed:
 
-The script will display the live feed with scan results. DocTR processes cards quickly, with PaddleOCR providing a backup for difficult cases. Press **'q'** to quit at any time.
+```bash
+git tag v1.0.0 && git push origin v1.0.0
+```
+
+---
+
+## Test and legacy scripts
+
+The [`test-scripts/`](test-scripts/) directory contains the original experimental scripts from before the GUI app existed — webcam scanners, picture-directory scanners, servo/stepper testers, and OCR experiments. See [`test-scripts/readme.md`](test-scripts/readme.md) for details on each script.
+
+---
+
+## Project structure
+
+```
+app/
+  main.py              Entry point
+  gui.py               Full GUI — tabs, camera, indicators, sort loop
+  source/
+    scanner.py         Camera capture, OCR pipeline, database lookup
+    serial_controller.py  Arduino serial protocol
+    ocr_processing.py  Text extraction and regex helpers
+    version.py         App version string
+  assets/
+    logo.svg           Header logo
+
+scripts/
+  build_macos.sh       PyInstaller macOS build script
+
+test-scripts/          Legacy and diagnostic scripts (see test-scripts/readme.md)
+
+tcgdex/                Card database source data
+  readme.md            Instructions for obtaining set data
+```

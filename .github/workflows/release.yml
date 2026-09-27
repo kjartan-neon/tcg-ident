@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    name: Build macOS app
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Homebrew dependencies
+        run: |
+          brew install cairo
+          brew install python-tk@3.12 || true
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pyinstaller pyserial opencv-python pillow cairosvg
+          pip install python-doctr paddlepaddle paddleocr || true
+
+      - name: Read version
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: bash scripts/build_macos.sh
+
+      - name: Find zip
+        id: find_zip
+        run: |
+          ZIP=$(ls dist/*.zip | head -n1)
+          echo "ZIP=$ZIP" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Scramble Switch Sorter v${{ steps.version.outputs.VERSION }}"
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: ${{ steps.find_zip.outputs.ZIP }}
