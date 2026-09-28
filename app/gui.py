@@ -19,6 +19,12 @@ from typing import Optional
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 SRC_DIR = os.path.join(APP_DIR, 'source')
+
+# Demo/test images — used when demo mode is active instead of the live camera
+DEMO_IMAGES = [
+    os.path.join(APP_DIR, 'assets', 'dummy1.jpg'),
+    os.path.join(APP_DIR, 'assets', 'dummy2.jpg'),
+]
 sys.path.insert(0, SRC_DIR)
 
 try:
@@ -225,6 +231,12 @@ class App(tk.Tk):
         self._save_timer_id          = None
         self._pulsing:   set = set()
         self._pulse_phase: int = 0
+
+        # Demo mode: use dummy images instead of camera; simulate serial hardware
+        self._demo_mode_v    = tk.BooleanVar(value=False)
+        self._demo_img_idx   = 0   # alternates 0/1 in the auto loop
+        self._demo_prev_tick = 0   # counts _tick_camera calls; drives slow image alternation
+        self._demo_prev_idx  = 0   # which dummy image is currently shown in the preview
         # tcgdex source folder path (used by the Build Database section)
         self._tcgdex_data_v = tk.StringVar(value=self._default_tcgdex_path())
         # Set filter selections to restore after the database loads
@@ -679,6 +691,44 @@ class App(tk.Tk):
             self._log('Not connected.'); return False
         return True
 
+    def _need_conn_or_demo(self) -> bool:
+        """Like _need_conn but also returns True in demo mode."""
+        if self._demo_mode_v.get():
+            return True
+        return self._need_conn()
+
+    def _lock_sorter(self, msg: str = 'Working…'):
+        """Show the sorter overlay with `msg` to block further button presses."""
+        self._sorter_overlay_lbl.config(text=msg)
+        self._sorter_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self._sorter_overlay.lift()
+
+    def _unlock_sorter(self):
+        """Remove the sorter overlay, re-enabling all tab buttons."""
+        self._sorter_overlay.place_forget()
+
+    def _sorter_overlay_stop(self):
+        """Stop button inside the overlay — aborts hardware and dismisses overlay."""
+        if not self._demo_mode_v.get() and self._controller.connected:
+            self._controller.stop()
+            self._log('Stopped.')
+        self._unlock_sorter()
+
+    def _sorter_do(self, msg: str, fn):
+        """Show the overlay, run fn() in a background thread, then hide it.
+
+        Use this for synchronous/blocking hardware calls (serial writes, sleeps).
+        For operations with their own on_done callback (cart moves, full_cycle)
+        call _lock_sorter() directly and pass _unlock_sorter to the callback.
+        """
+        self._lock_sorter(msg)
+        def _run():
+            try:
+                fn()
+            finally:
+                self.after(0, self._unlock_sorter)
+        threading.Thread(target=_run, daemon=True).start()
+
     # ── Tab: Connect ─────────────────────────────────────────────────────────
 
     def _build_conn_tab(self, nb):
@@ -764,8 +814,21 @@ class App(tk.Tk):
 
     def _build_sorter_tab(self, nb):
         p = self._make_tab(nb, 'Sorter')
+        # p is the inner scrollable frame; p.master is the scrollable canvas.
+        # We place the overlay directly on the canvas so it covers everything.
+        self._sorter_canvas = p.master
         p.columnconfigure(1, weight=1)
         r = 0
+
+        # ── Overlay (hidden until a sorter action is running) ─────────────────
+        ov = tk.Frame(self._sorter_canvas, bg='#1a1030')
+        self._sorter_overlay = ov
+        self._sorter_overlay_lbl = tk.Label(
+            ov, text='', bg='#1a1030', fg='#c4b5fd',
+            font=FONT_H1, wraplength=220, justify='center')
+        self._sorter_overlay_lbl.pack(expand=True, pady=(0, 12))
+        _RBtn(ov, '■ Stop', self._sorter_overlay_stop,
+              bg='#4c1d95', fg='white', hover='#6d28d9').pack()
 
         self._servo_open_v  = tk.StringVar(value=str(self._controller.servo_open_angle))
         self._servo_close_v = tk.StringVar(value=str(self._controller.servo_close_angle))
@@ -1064,6 +1127,22 @@ class App(tk.Tk):
         self._auto_count_lbl.grid(row=r, column=0, columnspan=2,
                                    sticky='w', padx=4, pady=4); r += 1
 
+        # Demo mode toggle — visually separated at the bottom of the tab
+        ttk.Separator(p, orient='horizontal').grid(
+            row=r, column=0, columnspan=2, sticky='ew', pady=(12, 4)); r += 1
+
+        ttk.Checkbutton(
+            p, text='Demo mode',
+            variable=self._demo_mode_v,
+        ).grid(row=r, column=0, columnspan=2, sticky='w', padx=4, pady=(0, 2)); r += 1
+
+        ttk.Label(
+            p,
+            text='Uses dummy images for real OCR scans. '
+                 'Simulates serial hardware in the log. No connection needed.',
+            style='Muted.TLabel', wraplength=260, justify='left',
+        ).grid(row=r, column=0, columnspan=2, sticky='w', padx=4, pady=(0, 8)); r += 1
+
     # ── Camera: drag-to-crop ──────────────────────────────────────────────────
 
     def _cam_press(self, event):
@@ -1121,68 +1200,78 @@ class App(tk.Tk):
     # ── Camera: frame display ─────────────────────────────────────────────────
 
     def _tick_camera(self):
+        frame = None
+
         if IMAGING_OK and self._scanner.camera_open:
             frame = self._scanner.get_frame()
-            if frame is not None:
-                try:
-                    cw = self._cam_canvas.winfo_width()
-                    ch = self._cam_canvas.winfo_height()
-                    if cw > 10 and ch > 10:
-                        fh, fw = frame.shape[:2]
-                        # Letterbox / pillarbox scaling: use the smaller ratio
-                        # so the frame fits entirely inside the canvas without
-                        # cropping or stretching in either dimension.
-                        scale  = min(cw / fw, ch / fh)
-                        new_w  = int(fw * scale)
-                        new_h  = int(fh * scale)
-                        disp   = cv2.resize(frame, (new_w, new_h))
-                        rgb    = cv2.cvtColor(disp, cv2.COLOR_BGR2RGB)
-                        if new_w != cw or new_h != ch:
-                            # Frame doesn't fill the full canvas — composite it
-                            # onto a solid dark background to fill the bars.
-                            bg = Image.new('RGB', (cw, ch), (10, 5, 20))
-                            bg.paste(Image.fromarray(rgb),
-                                     ((cw - new_w) // 2, (ch - new_h) // 2))
-                            canvas_img = bg
-                        else:
-                            canvas_img = Image.fromarray(rgb)
-                        self._photo = ImageTk.PhotoImage(image=canvas_img)
-                        if self._cam_img_id is None:
-                            self._cam_img_id = self._cam_canvas.create_image(
-                                0, 0, anchor='nw', image=self._photo, tags='camimg')
-                            self._cam_canvas.itemconfig('notext', state='hidden')
-                        else:
-                            self._cam_canvas.itemconfig(self._cam_img_id,
-                                                        image=self._photo)
+        elif IMAGING_OK and self._demo_mode_v.get():
+            # Demo mode with no camera: show dummy images, alternating every
+            # ~90 ticks (≈3 s at 30 fps) so the user can see both images and
+            # set the scan area against realistic card content.
+            self._demo_prev_tick += 1
+            if self._demo_prev_tick >= 90:
+                self._demo_prev_tick = 0
+                self._demo_prev_idx  = (self._demo_prev_idx + 1) % len(DEMO_IMAGES)
+            frame = self._demo_get_frame(self._demo_prev_idx)
 
-                        # Crop overlay — recomputed from normalized coords every
-                        # frame so it stays correct after resize / camera reopen.
-                        # Default (no user crop) = full frame.
-                        cr = self._scanner.crop_region
-                        if cr:
-                            ox1 = int(cr[0] * cw); oy1 = int(cr[1] * ch)
-                            ox2 = int(cr[2] * cw); oy2 = int(cr[3] * ch)
-                        else:
-                            ox1, oy1, ox2, oy2 = 2, 2, cw - 2, ch - 2
+        if frame is not None:
+            try:
+                cw = self._cam_canvas.winfo_width()
+                ch = self._cam_canvas.winfo_height()
+                if cw > 10 and ch > 10:
+                    fh, fw = frame.shape[:2]
+                    # Letterbox / pillarbox scaling: fit frame inside canvas
+                    # without cropping or stretching.
+                    scale  = min(cw / fw, ch / fh)
+                    new_w  = int(fw * scale)
+                    new_h  = int(fh * scale)
+                    disp   = cv2.resize(frame, (new_w, new_h))
+                    rgb    = cv2.cvtColor(disp, cv2.COLOR_BGR2RGB)
+                    if new_w != cw or new_h != ch:
+                        # Composite onto dark background to fill letterbox bars
+                        bg = Image.new('RGB', (cw, ch), (10, 5, 20))
+                        bg.paste(Image.fromarray(rgb),
+                                 ((cw - new_w) // 2, (ch - new_h) // 2))
+                        canvas_img = bg
+                    else:
+                        canvas_img = Image.fromarray(rgb)
+                    self._photo = ImageTk.PhotoImage(image=canvas_img)
+                    if self._cam_img_id is None:
+                        self._cam_img_id = self._cam_canvas.create_image(
+                            0, 0, anchor='nw', image=self._photo, tags='camimg')
+                        self._cam_canvas.itemconfig('notext', state='hidden')
+                    else:
+                        self._cam_canvas.itemconfig(self._cam_img_id,
+                                                    image=self._photo)
 
-                        if self._crop_rid is None:
-                            self._crop_rid = self._cam_canvas.create_rectangle(
-                                ox1, oy1, ox2, oy2,
-                                outline='#a7f3d0', width=2)
-                        else:
-                            self._cam_canvas.coords(
-                                self._crop_rid, ox1, oy1, ox2, oy2)
-                            self._cam_canvas.itemconfig(
-                                self._crop_rid, state='normal')
-                        self._cam_canvas.tag_raise(self._crop_rid)
+                    # Crop overlay — recomputed from normalized coords every
+                    # frame so it stays correct after resize or camera reopen.
+                    cr = self._scanner.crop_region
+                    if cr:
+                        ox1 = int(cr[0] * cw); oy1 = int(cr[1] * ch)
+                        ox2 = int(cr[2] * cw); oy2 = int(cr[3] * ch)
+                    else:
+                        ox1, oy1, ox2, oy2 = 2, 2, cw - 2, ch - 2
 
-                        # Live-drag selection rect (dashed pink)
-                        if self._sel_rid:
-                            self._cam_canvas.tag_raise(self._sel_rid)
-                except Exception:
-                    pass
-        # Re-schedule ~33 ms from now (≈30 fps).  Using after() keeps this on
-        # the main thread — no threading required for the display loop.
+                    if self._crop_rid is None:
+                        self._crop_rid = self._cam_canvas.create_rectangle(
+                            ox1, oy1, ox2, oy2,
+                            outline='#a7f3d0', width=2)
+                    else:
+                        self._cam_canvas.coords(
+                            self._crop_rid, ox1, oy1, ox2, oy2)
+                        self._cam_canvas.itemconfig(
+                            self._crop_rid, state='normal')
+                    self._cam_canvas.tag_raise(self._crop_rid)
+
+                    # Live-drag selection rect (dashed pink)
+                    if self._sel_rid:
+                        self._cam_canvas.tag_raise(self._sel_rid)
+            except Exception:
+                pass
+
+        # Re-schedule ~33 ms from now (≈30 fps).  after() keeps this on the
+        # main thread — no extra threading needed for the display loop.
         self.after(33, self._tick_camera)
 
     # ── Connect actions ───────────────────────────────────────────────────────
@@ -1292,82 +1381,139 @@ class App(tk.Tk):
         self._log(f'Current cart set to {self._controller.current_cart} (no movement).')
 
     def _apply_settings(self):
-        if not self._need_conn(): return
-        try:
-            self._controller.servo_open_angle  = int(self._servo_open_v.get())
-            self._controller.servo_close_angle = int(self._servo_close_v.get())
-            self._controller.set_steps(int(self._step_size_v.get()))
-            self._controller.set_delay(int(self._delay_v.get()))
-        except ValueError:
-            self._log('Invalid value in settings.')
+        if not self._need_conn_or_demo(): return
+        if self._demo_mode_v.get():
+            self._sorter_do('[Demo] Applying settings…', lambda: time.sleep(2))
+            return
+        def _do():
+            try:
+                self._controller.servo_open_angle  = int(self._servo_open_v.get())
+                self._controller.servo_close_angle = int(self._servo_close_v.get())
+                self._controller.set_steps(int(self._step_size_v.get()))
+                self._controller.set_delay(int(self._delay_v.get()))
+            except ValueError:
+                self.after(0, lambda: self._log('Invalid value in settings.'))
+        self._sorter_do('Applying settings…', _do)
 
     def _open_gate(self):
-        if not self._need_conn(): return
+        if not self._need_conn_or_demo(): return
+        if self._demo_mode_v.get():
+            self._sorter_do('[Demo] Opening gate…', lambda: time.sleep(2)); return
         try:
             self._controller.servo_open_angle = int(self._servo_open_v.get())
         except ValueError:
             pass
-        self._controller.open_gate()
+        self._sorter_do('Opening gate…', self._controller.open_gate)
 
     def _close_gate(self):
-        if not self._need_conn(): return
+        if not self._need_conn_or_demo(): return
+        if self._demo_mode_v.get():
+            self._sorter_do('[Demo] Closing gate…', lambda: time.sleep(2)); return
         try:
             self._controller.servo_close_angle = int(self._servo_close_v.get())
         except ValueError:
             pass
-        self._controller.close_gate()
+        self._sorter_do('Closing gate…', self._controller.close_gate)
 
     def _set_servo(self):
-        if not self._need_conn(): return
+        if not self._need_conn_or_demo(): return
+        if self._demo_mode_v.get():
+            self._sorter_do('[Demo] Setting servo…', lambda: time.sleep(2)); return
         try:
-            self._controller.servo(int(self._servo_v.get()))
+            angle = int(self._servo_v.get())
         except ValueError:
-            self._log('Invalid servo angle.')
+            self._log('Invalid servo angle.'); return
+        self._sorter_do(f'Servo → {angle}°…', lambda: self._controller.servo(angle))
 
     def _cart1(self):
-        if self._need_conn():
-            self._controller.cart1(on_done=lambda _: self.after(0, self._sync_cart_label))
+        if not self._need_conn_or_demo(): return
+        if self._demo_mode_v.get():
+            self._sorter_do('[Demo] Moving to cart 1…', lambda: time.sleep(2)); return
+        self._lock_sorter('Moving to cart 1…')
+        def _done(_):
+            self.after(0, self._sync_cart_label)
+            self.after(0, self._unlock_sorter)
+        self._controller.cart1(on_done=_done)
 
     def _cart2(self):
-        if self._need_conn():
-            self._controller.cart2(on_done=lambda _: self.after(0, self._sync_cart_label))
+        if not self._need_conn_or_demo(): return
+        if self._demo_mode_v.get():
+            self._sorter_do('[Demo] Moving to cart 2…', lambda: time.sleep(2)); return
+        self._lock_sorter('Moving to cart 2…')
+        def _done(_):
+            self.after(0, self._sync_cart_label)
+            self.after(0, self._unlock_sorter)
+        self._controller.cart2(on_done=_done)
 
     def _cart3(self):
-        if self._need_conn():
-            self._controller.cart3(on_done=lambda _: self.after(0, self._sync_cart_label))
+        if not self._need_conn_or_demo(): return
+        if self._demo_mode_v.get():
+            self._sorter_do('[Demo] Moving to cart 3…', lambda: time.sleep(2)); return
+        self._lock_sorter('Moving to cart 3…')
+        def _done(_):
+            self.after(0, self._sync_cart_label)
+            self.after(0, self._unlock_sorter)
+        self._controller.cart3(on_done=_done)
 
     def _fwd_n(self):
-        if not self._need_conn(): return
+        if not self._need_conn_or_demo(): return
         try:
-            self._controller.step_async(int(self._stepn_v.get()))
+            n = int(self._stepn_v.get())
         except ValueError:
-            self._log('Invalid step count.')
+            self._log('Invalid step count.'); return
+        if self._demo_mode_v.get():
+            self._sorter_do(f'[Demo] Forward {n} steps…', lambda: time.sleep(2)); return
+        self._lock_sorter(f'Forward {n} steps…')
+        self._controller.step_async(
+            n, on_done=lambda _: self.after(0, self._unlock_sorter))
 
     def _back_n(self):
-        if not self._need_conn(): return
+        if not self._need_conn_or_demo(): return
         try:
-            self._controller.step_async(-int(self._stepn_v.get()))
+            n = int(self._stepn_v.get())
         except ValueError:
-            self._log('Invalid step count.')
+            self._log('Invalid step count.'); return
+        if self._demo_mode_v.get():
+            self._sorter_do(f'[Demo] Back {n} steps…', lambda: time.sleep(2)); return
+        self._lock_sorter(f'Back {n} steps…')
+        self._controller.step_async(
+            -n, on_done=lambda _: self.after(0, self._unlock_sorter))
 
     def _feed(self):
-        if self._need_conn(): self._controller.feed()
+        if not self._need_conn_or_demo(): return
+        if self._demo_mode_v.get():
+            self._sorter_do('[Demo] Feeding card…', lambda: time.sleep(2)); return
+        self._sorter_do('Feeding card…', self._controller.feed)
 
     def _stop(self):
-        if self._need_conn(): self._controller.stop()
+        # Stop is an emergency control — it always works and also dismisses
+        # any active overlay so the user regains access to the tab.
+        if not self._demo_mode_v.get() and not self._need_conn():
+            return
+        if not self._demo_mode_v.get():
+            self._controller.stop()
+        self._unlock_sorter()
 
     def _release(self):
-        if self._need_conn(): self._controller.release()
+        if not self._need_conn_or_demo(): return
+        if self._demo_mode_v.get():
+            self._sorter_do('[Demo] Releasing stepper…', lambda: time.sleep(2)); return
+        self._sorter_do('Releasing stepper…', self._controller.release)
 
     def _full_cycle(self):
-        if not self._need_conn(): return
+        if not self._need_conn_or_demo(): return
         try:
             n = int(self._cycles_v.get())
         except ValueError:
             n = 1
-        self._controller.full_cycle(
-            n, on_progress=self._on_status,
-            on_done=lambda msg: self.after(0, self._log, msg))
+        if self._demo_mode_v.get():
+            self._sorter_do(f'[Demo] Running {n} full cycle(s)…',
+                            lambda: time.sleep(2 * n)); return
+        self._lock_sorter(f'Running {n} full cycle(s)…')
+        def _done(msg):
+            self.after(0, lambda: self._log(msg))
+            self.after(0, self._unlock_sorter)
+        self._controller.full_cycle(n, on_progress=self._on_status, on_done=_done)
 
     # ── Scanner actions ───────────────────────────────────────────────────────
 
@@ -1421,75 +1567,80 @@ class App(tk.Tk):
         self.after(350, self._pulse_tick)
 
     def _connect_all(self):
-        self._log('Connecting all…')
-        # Put all four indicator labels into the pulsing set so the animation
-        # loop knows which ones to animate blue.
-        self._pulsing = {self._ss_serial_lbl, self._ss_cam_lbl,
-                         self._ss_ocr_lbl, self._ss_db_lbl}
+        demo = self._demo_mode_v.get()
+        self._log('Connecting all…' if not demo else '[Demo] Connecting — skipping serial and camera.')
+
+        # In demo mode only OCR and database need to connect; serial and camera
+        # are simulated.  We only pulse the labels that will actually do work.
+        if demo:
+            self._pulsing = {self._ss_ocr_lbl, self._ss_db_lbl}
+            self._ss_serial_lbl.config(text='● Serial — skipped (demo)', foreground=C_MUTED)
+            self._ss_cam_lbl.config(   text='● Camera — skipped (demo)', foreground=C_MUTED)
+        else:
+            self._pulsing = {self._ss_serial_lbl, self._ss_cam_lbl,
+                             self._ss_ocr_lbl, self._ss_db_lbl}
+            for lbl, txt in (
+                (self._ss_serial_lbl, '◉ Serial — connecting…'),
+                (self._ss_cam_lbl,    '◉ Camera — opening…'),
+            ):
+                lbl.config(text=txt, foreground='#3b82f6')
+
         self._pulse_phase = 0
         for lbl, txt in (
-            (self._ss_serial_lbl, '◉ Serial — connecting…'),
-            (self._ss_cam_lbl,    '◉ Camera — opening…'),
-            (self._ss_ocr_lbl,    '◉ OCR — loading…'),
-            (self._ss_db_lbl,     '◉ Database — loading…'),
+            (self._ss_ocr_lbl, '◉ OCR — loading…'),
+            (self._ss_db_lbl,  '◉ Database — loading…'),
         ):
             lbl.config(text=txt, foreground='#3b82f6')
-        self._pulse_tick()   # start the colour-cycling animation
+        self._pulse_tick()
 
-        # OCR model loading already manages its own background thread inside
-        # scanner.load_models(), so we just pass a callback for when it finishes.
+        # OCR loading manages its own background thread inside load_models().
         def _ocr_done(doctr_ok, paddle_ok):
             parts = (['DocTR'] if doctr_ok else []) + (['Paddle'] if paddle_ok else [])
             txt   = '● ' + (', '.join(parts) + ' ready' if parts else 'none loaded')
             color = C_SUCCESS if parts else '#9ca3af'
-            # after(0, ...) — safe tkinter update from a background thread.
             self.after(0, lambda: self._models_lbl.config(text=txt, foreground=color))
-            # Remove from _pulsing so the indicator stops animating.
             self._pulsing.discard(self._ss_ocr_lbl)
         self._scanner.load_models(on_done=_ocr_done)
 
-        # Serial, camera, and database are all blocking calls (they each wait
-        # for hardware or disk), so we run them sequentially in one background
-        # thread to keep the UI responsive.  Each step discards its label from
-        # _pulsing when it finishes, which stops the pulse for that item.
+        # Serial, camera, and database are blocking; run in a background thread.
         def _run():
-            # ── Serial ────────────────────────────────────────────────────────
-            port = self._port_v.get().split(' — ')[0].strip()
-            try:
-                baud = int(self._baud_v.get())
-            except ValueError:
-                baud = 115200
-            self.after(0, lambda: self._conn_lbl.config(
-                text='● Connecting…', foreground=C_MUTED))
-            ok = self._controller.connect(port, baud)   # blocks until done
-            txt   = '● Connected'  if ok else '● Disconnected'
-            color = C_SUCCESS      if ok else '#9ca3af'
-            # Capture txt/color in default args so the lambda closes over the
-            # current values, not variables that may change on the next loop.
-            self.after(0, lambda t=txt, c=color: self._conn_lbl.config(text=t, foreground=c))
-            self.after(0, self._sync_cart_label)
-            self.after(0, self._redraw_header)
-            self._pulsing.discard(self._ss_serial_lbl)
+            if not demo:
+                # ── Serial ────────────────────────────────────────────────────
+                port = self._port_v.get().split(' — ')[0].strip()
+                try:
+                    baud = int(self._baud_v.get())
+                except ValueError:
+                    baud = 115200
+                self.after(0, lambda: self._conn_lbl.config(
+                    text='● Connecting…', foreground=C_MUTED))
+                ok = self._controller.connect(port, baud)
+                txt   = '● Connected'  if ok else '● Disconnected'
+                color = C_SUCCESS      if ok else '#9ca3af'
+                self.after(0, lambda t=txt, c=color: self._conn_lbl.config(text=t, foreground=c))
+                self.after(0, self._sync_cart_label)
+                self.after(0, self._redraw_header)
+                self._pulsing.discard(self._ss_serial_lbl)
 
-            # ── Camera ────────────────────────────────────────────────────────
-            try:
-                idx = int(self._cam_idx_v.get().split()[0])
-            except ValueError:
-                idx = 0
-            ok_cam = self._scanner.open_camera(idx)     # blocks briefly
-            txt   = f'● Camera {idx} open'    if ok_cam else f'● Failed to open {idx}'
-            color = C_SUCCESS                   if ok_cam else '#9ca3af'
-            self.after(0, lambda t=txt, c=color: self._cam_conn_lbl.config(text=t, foreground=c))
-            self._pulsing.discard(self._ss_cam_lbl)
+                # ── Camera ────────────────────────────────────────────────────
+                try:
+                    idx = int(self._cam_idx_v.get().split()[0])
+                except ValueError:
+                    idx = 0
+                ok_cam = self._scanner.open_camera(idx)
+                txt   = f'● Camera {idx} open'  if ok_cam else f'● Failed to open {idx}'
+                color = C_SUCCESS               if ok_cam else '#9ca3af'
+                self.after(0, lambda t=txt, c=color: self._cam_conn_lbl.config(text=t, foreground=c))
+                self._pulsing.discard(self._ss_cam_lbl)
 
             # ── Database ──────────────────────────────────────────────────────
             self.after(0, lambda: self._db_status_lbl.config(
                 text='● Loading…', foreground=C_MUTED))
-            self._scanner.load_database(self._db_v.get())  # synchronous JSON read
+            self._scanner.load_database(self._db_v.get())
             if self._scanner.database_loaded:
                 self.after(0, lambda: self._db_status_lbl.config(
                     text='● Loaded', foreground=C_SUCCESS))
                 self.after(0, self._refresh_criteria_lists)
+                self.after(0, self._populate_set_filter)
             else:
                 self.after(0, lambda: self._db_status_lbl.config(
                     text='● Failed', foreground='#9ca3af'))
@@ -1581,7 +1732,8 @@ class App(tk.Tk):
         self._scanner.load_models(on_done=on_done)
 
     def _scan_now(self):
-        if not self._scanner.camera_open:
+        demo = self._demo_mode_v.get()
+        if not demo and not self._scanner.camera_open:
             self._log('Camera not open.'); return
         if not self._scanner.models_ready:
             self._log('OCR models not loaded.'); return
@@ -1595,10 +1747,14 @@ class App(tk.Tk):
             self.after(0, lambda: self._scan_res_lbl.config(text=result, foreground=color))
             self.after(0, lambda: self._result_lbl.config(text=result))
 
-        self._scanner.scan_async(max_attempts=retries, on_result=on_result)
+        if demo:
+            self._demo_scan_async(on_result, retries)
+        else:
+            self._scanner.scan_async(max_attempts=retries, on_result=on_result)
 
     def _scan_and_identify(self):
-        if not self._scanner.camera_open:
+        demo = self._demo_mode_v.get()
+        if not demo and not self._scanner.camera_open:
             self._log('Camera not open.'); return
         if not self._scanner.models_ready:
             self._log('OCR models not loaded.'); return
@@ -1620,9 +1776,12 @@ class App(tk.Tk):
                 msg   = f'{result}  →  Cart {cart}'
                 color = C_SUCCESS
             self.after(0, lambda: self._scan_res_lbl.config(text=msg, foreground=color))
-            self.after(0, lambda: self._result_lbl.config(text=msg))
+            self.after(0, lambda: self._result_lbl.config(text=result))
 
-        self._scanner.scan_async(max_attempts=retries, on_result=on_result)
+        if demo:
+            self._demo_scan_async(on_result, retries)
+        else:
+            self._scanner.scan_async(max_attempts=retries, on_result=on_result)
 
     # ── Database actions ──────────────────────────────────────────────────────
 
@@ -1800,18 +1959,67 @@ class App(tk.Tk):
             criteria[n] = {'field': field, 'values': values}
         return criteria
 
+    # ── Demo mode helpers ─────────────────────────────────────────────────────
+
+    def _demo_get_frame(self, idx: int = 0):
+        """Load a dummy JPEG as an OpenCV BGR frame for demo/test mode.
+
+        `idx` selects which dummy image to use (0 → dummy1.jpg, 1 → dummy2.jpg).
+        Returns a numpy array compatible with scanner.scan_frame(), or None if
+        the file could not be read.
+        """
+        path = DEMO_IMAGES[idx % len(DEMO_IMAGES)]
+        frame = cv2.imread(path)
+        if frame is None:
+            self._log(f'[Demo] Could not load image: {path}')
+        return frame
+
+    def _demo_scan_async(self, on_result, retries: int = 5):
+        """Scan a dummy image in a background thread — for demo mode.
+
+        Behaves exactly like scanner.scan_async() but feeds a static JPEG
+        into scan_frame() instead of capturing from the webcam.  The image
+        index used is whatever _demo_img_idx currently points at.
+        """
+        idx = self._demo_img_idx
+
+        def _run():
+            for attempt in range(retries):
+                self._scanner._emit(f'[Demo] Scan attempt {attempt + 1}/{retries}…')
+                frame = self._demo_get_frame(idx)
+                if frame is None:
+                    time.sleep(0.3)
+                    continue
+                result = self._scanner.scan_frame(frame)
+                if 'FAILED' not in result:
+                    if on_result:
+                        on_result(result)
+                    return
+                time.sleep(0.3)
+            msg = '--- FAILED: all demo scan attempts exhausted ---'
+            if on_result:
+                on_result(msg)
+
+        threading.Thread(target=_run, daemon=True).start()
+
     # ── Sort & Scan automation ────────────────────────────────────────────────
 
     def _start_auto(self):
         if self._sort_active:
             self._log('Already running.'); return
-        if not self._controller.connected:
+        demo = self._demo_mode_v.get()
+        # In demo mode we skip hardware checks — images substitute for camera,
+        # and all serial operations are simulated with log messages + sleeps.
+        if not demo and not self._controller.connected:
             self._log('Sorter not connected.'); return
-        if not self._scanner.camera_open:
+        if not demo and not self._scanner.camera_open:
             self._log('Camera not open.'); return
         if not self._scanner.models_ready:
             self._log('OCR models not loaded.'); return
+        if demo:
+            self._log('[Demo] Starting in demo mode — no hardware required.')
         self._sort_active = True
+        self._demo_img_idx = 0  # reset image sequence at start of each run
         self._auto_status_lbl.config(text='Running…', foreground=C_SUCCESS)
         threading.Thread(target=self._auto_loop, daemon=True).start()
 
@@ -1824,12 +2032,11 @@ class App(tk.Tk):
         self.after(0, lambda: self._auto_status_lbl.config(text=msg))
 
     def _auto_loop(self):
-        # This method runs entirely in a background thread (started by
-        # _start_auto).  All hardware calls (feed, step, scan) block here
-        # while the UI stays responsive on the main thread.
+        # Runs entirely in a background thread.  All blocking calls (hardware
+        # or time.sleep) happen here; the UI stays responsive on the main thread.
 
-        # Snapshot the criteria and timing values once at the start so that
-        # changing the UI mid-run doesn't affect the current batch.
+        # Snapshot timing/criteria once — UI changes mid-run don't affect this batch.
+        demo           = self._demo_mode_v.get()
         criteria       = self._get_sort_criteria()
         not_found_cart = self._not_found_cart_v.get()
         count          = 0
@@ -1846,54 +2053,82 @@ class App(tk.Tk):
         except ValueError:
             retries   = 5
 
-        # _stop_auto sets _sort_active = False; the loop exits cleanly at the
-        # end of the current card cycle without needing a hard interrupt.
+        # _stop_auto sets _sort_active = False; loop exits after the current card.
         while self._sort_active:
             try:
-                self._set_auto_status('Feeding card…')
-                self._controller.feed()
-                time.sleep(settle)
+                # ── Feed ──────────────────────────────────────────────────────
+                if demo:
+                    self._set_auto_status('[Demo] Feeding card…')
+                    self._log('[Demo] Feed mechanism activated')
+                    time.sleep(settle)
+                else:
+                    self._set_auto_status('Feeding card…')
+                    self._controller.feed()
+                    time.sleep(settle)
 
-                self._set_auto_status('Scanning…')
+                # ── Scan ──────────────────────────────────────────────────────
                 result = '--- FAILED ---'
-                for _ in range(retries):
-                    frame = self._scanner.get_frame()
-                    if frame is None:
-                        time.sleep(0.3); continue
-                    r = self._scanner.scan_frame(frame)
-                    if 'FAILED' not in r:
-                        result = r; break
-                    time.sleep(0.3)
+                if demo:
+                    self._set_auto_status('[Demo] Scanning…')
+                    frame = self._demo_get_frame(self._demo_img_idx)
+                    if frame is not None:
+                        r = self._scanner.scan_frame(frame)
+                        if 'FAILED' not in r:
+                            result = r
+                else:
+                    self._set_auto_status('Scanning…')
+                    for _ in range(retries):
+                        frame = self._scanner.get_frame()
+                        if frame is None:
+                            time.sleep(0.3); continue
+                        r = self._scanner.scan_frame(frame)
+                        if 'FAILED' not in r:
+                            result = r; break
+                        time.sleep(0.3)
 
+                # ── Identify cart ─────────────────────────────────────────────
                 if 'FAILED' not in result:
                     card_data   = self._scanner.find_card_data(result)
                     target_cart = self._scanner.determine_cart(
                         card_data, criteria, not_found_cart)
-                    self._set_auto_status(f'{result}  →  Cart {target_cart}')
+                    prefix = '[Demo] ' if demo else ''
+                    self._set_auto_status(f'{prefix}{result}  →  Cart {target_cart}')
                 else:
                     target_cart = not_found_cart
-                    self._set_auto_status(f'Scan failed → Cart {target_cart}')
+                    prefix = '[Demo] ' if demo else ''
+                    self._set_auto_status(f'{prefix}Scan failed → Cart {target_cart}')
 
-                # move_to_cart is non-blocking (it fires off its own thread),
-                # so we use a threading.Event to wait here until the hardware
-                # signals DONE.  timeout=30 prevents an infinite hang if the
-                # Arduino never responds.
-                done = threading.Event()
-                self._controller.move_to_cart(target_cart,
-                                               on_done=lambda _: done.set())
-                done.wait(timeout=30)
-                # after(0, ...) — update the label safely from this thread.
-                self.after(0, self._sync_cart_label)
+                # ── Move + drop ───────────────────────────────────────────────
+                if demo:
+                    self._log(f'[Demo] Stepper: moving to cart {target_cart}…')
+                    time.sleep(1.5)  # simulate travel time
+                    self.after(0, self._sync_cart_label)
+                    self._set_auto_status(f'[Demo] Dropping into cart {target_cart}…')
+                    self._log(f'[Demo] Servo: gate open — dropping card into cart {target_cart}')
+                    time.sleep(drop_wait)
+                    self._log('[Demo] Servo: gate closed')
+                    self._log('[Demo] Stepper: returning to cart 1…')
+                    time.sleep(1.5)  # simulate return travel
+                    self.after(0, self._sync_cart_label)
+                    # Advance to the next dummy image for the next card
+                    self._demo_img_idx = (self._demo_img_idx + 1) % len(DEMO_IMAGES)
+                else:
+                    # move_to_cart is non-blocking; use an Event to wait for DONE
+                    done = threading.Event()
+                    self._controller.move_to_cart(target_cart,
+                                                   on_done=lambda _: done.set())
+                    done.wait(timeout=30)
+                    self.after(0, self._sync_cart_label)
 
-                self._set_auto_status(f'Dropping into cart {target_cart}…')
-                self._controller.open_gate()
-                time.sleep(drop_wait)
-                self._controller.close_gate()
+                    self._set_auto_status(f'Dropping into cart {target_cart}…')
+                    self._controller.open_gate()
+                    time.sleep(drop_wait)
+                    self._controller.close_gate()
 
-                done2 = threading.Event()
-                self._controller.move_to_cart(1, on_done=lambda _: done2.set())
-                done2.wait(timeout=30)
-                self.after(0, self._sync_cart_label)
+                    done2 = threading.Event()
+                    self._controller.move_to_cart(1, on_done=lambda _: done2.set())
+                    done2.wait(timeout=30)
+                    self.after(0, self._sync_cart_label)
 
                 count += 1
                 n = count

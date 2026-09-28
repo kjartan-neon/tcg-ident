@@ -17,10 +17,10 @@
   "auto_retries": "5",
   "scan_retries": "5",
   "crop_region": [
-    0.005134788189987163,
-    0.15831663326653306,
-    0.3992297817715019,
-    0.6352705410821643
+    0.009174311926605505,
+    0.5170340681362725,
+    0.36959370904325034,
+    0.8016032064128257
   ],
   "tcgdex_data_path": "/Users/kjartan.bjorndal.michalsen/Documents/GitHub/tcg-ident/tcgdex/data",
   "allowed_set_abbreviations": [
@@ -48,9 +48,7 @@
   "cart_criteria": {
     "1": {
       "field": "category",
-      "values": [
-        "Stadium"
-      ]
+      "values": []
     },
     "2": {
       "field": "types",

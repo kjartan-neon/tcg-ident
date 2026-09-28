@@ -242,6 +242,16 @@ class CardScanner:
             return f"{info} [Paddle]" if "FAILED" not in info else None
         except Exception as e:
             self._emit(f"PaddleOCR error: {e}")
+            # PreconditionNotMetError means Paddle's internal tensor/event state
+            # is corrupted — it will not recover on subsequent calls.  Discard
+            # the instance so future scans skip straight to DocTR-only mode
+            # instead of repeating the error on every attempt.
+            if 'PreconditionNotMetError' in type(e).__name__ or \
+               'PreconditionNotMetError' in str(e):
+                self._paddle = None
+                self._paddle_loaded = False
+                self._emit("PaddleOCR disabled (internal state corrupted) — "
+                           "restart the app to re-enable it.")
             return None
 
     def scan_frame(self, frame) -> str:
