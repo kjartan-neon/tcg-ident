@@ -94,7 +94,17 @@ class SorterController:
             )
             return True
         except Exception as e:
-            self._emit(f"Connection error: {e}")
+            msg = f"Connection error: {e}"
+            # Errno 13 on Linux = user lacks permission for /dev/ttyUSB*.
+            # Device is normally root:dialout 660, so fix is `usermod -aG dialout`.
+            err = getattr(e, 'errno', None)
+            if err == 13 or 'Permission denied' in str(e):
+                msg += (
+                    f"\nPermission denied on {port}. On Linux run:\n"
+                    f"  sudo usermod -aG dialout $USER\n"
+                    f"then log out/in (or run 'newgrp dialout'), then reconnect."
+                )
+            self._emit(msg)
             return False
 
     def disconnect(self):

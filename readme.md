@@ -56,6 +56,40 @@ Crop area controls and on-demand scan testing. Drag on the camera feed to set th
 
 The app communicates over serial at a configurable baud rate (default 115200). Use the Connect tab to scan for ports and select the correct one.
 
+### Linux serial permissions (`/dev/ttyUSB0: Permission denied`)
+
+On Linux, USB serial devices are usually owned `root:dialout` with mode `660`:
+
+```
+crw-rw---- 1 root dialout ... /dev/ttyUSB0
+```
+
+If your user is not in the `dialout` group, connecting fails with:
+
+```
+Connection error: [Errno 13] could not open port /dev/ttyUSB0: [Errno 13] Permission denied: '/dev/ttyUSB0'
+```
+
+The app also prints the fix in the log. Permanent fix:
+
+```bash
+sudo usermod -aG dialout $USER
+newgrp dialout
+# or log out and back in — group membership only applies on fresh login
+id   # should now list dialout
+```
+
+Then retry Connect. Temporary workaround (resets on replug/reboot):
+
+```bash
+sudo chmod 666 /dev/ttyUSB0
+```
+
+If it still fails after joining `dialout`, check `dmesg | tail -20` for the
+CH340/Arduino enumerating as `ttyUSB0`, check nothing else holds it with
+`sudo lsof /dev/ttyUSB0`, and on Ubuntu disable ModemManager grabbing it with
+`sudo systemctl disable --now ModemManager`.
+
 ---
 
 ## Setup

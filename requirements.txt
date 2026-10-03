@@ -1,0 +1,37 @@
+# Scramble Switch Sorter — Python dependencies
+# Install with:  pip install -r requirements.txt
+# Python 3.9+ recommended.
+#
+# NOTE: `tkinter` (used by app/gui.py) is NOT installable via pip.
+# It is part of the Python standard library and must be installed
+# as a SYSTEM package before creating/using your .venv:
+#   Ubuntu / Debian / Linux Mint:  sudo apt update && sudo apt install -y python3-tk
+#   Fedora:                        sudo dnf install -y python3-tkinter
+#   macOS (brew python):           brew install python-tk  (or use python.org installer, tk is bundled)
+#   Windows:                       bundled with python.org installer (check "tcl/tk and IDLE")
+# After installing, re-activate your venv and verify with:
+#   python -c "import tkinter; print(tkinter.TkVersion)"
+# OCR models download automatically on first use.
+
+# --- Core app (app/main.py, app/gui.py, app/source/) ---
+opencv-python          # cv2: camera capture, frame handling
+Pillow                 # PIL: image display, gradient header, logo
+cairosvg               # SVG logo rendering
+pyserial               # serial: Arduino sorter communication
+numpy                  # array handling (used directly + required by cv2/OCR)
+
+# DocTR (primary OCR engine) — torch backend per readme
+python-doctr[torch]
+
+# PaddleOCR (fallback OCR engine) + its backend
+paddlepaddle
+paddleocr
+
+# --- Build ---
+# Required only for scripts/build_macos.sh (macOS .app bundle)
+pyinstaller
+
+# --- Test / legacy scripts only (test-scripts/) ---
+# Uncomment if you use the experimental scripts:
+# pyfirmata2             # step-test.py, servo-test.py, test.py
+# surya-ocr              # pictureScan-surya.py

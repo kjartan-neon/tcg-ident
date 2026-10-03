@@ -1,5 +1,5 @@
 {
-  "port": "/dev/cu.usbserial-130",
+  "port": "/dev/ttyUSB0",
   "baud": "115200",
   "cam_idx": "0",
   "db_path": "/Users/kjartan.bjorndal.michalsen/Documents/GitHub/tcg-ident/card_data_lookup.json",
