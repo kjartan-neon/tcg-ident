@@ -1,8 +1,8 @@
 {
   "port": "/dev/ttyUSB0",
   "baud": "115200",
-  "cam_idx": "0",
-  "db_path": "/Users/kjartan.bjorndal.michalsen/Documents/GitHub/tcg-ident/card_data_lookup.json",
+  "cam_idx": "1",
+  "db_path": "card_data_lookup.json",
   "servo_open": "50",
   "servo_close": "179",
   "step_size": "870",
@@ -17,16 +17,20 @@
   "auto_retries": "5",
   "scan_retries": "5",
   "crop_region": [
-    0.009174311926605505,
-    0.5170340681362725,
-    0.36959370904325034,
-    0.8016032064128257
+    0.05032258064516129,
+    0.08266129032258064,
+    0.5277419354838709,
+    0.49193548387096775
   ],
-  "tcgdex_data_path": "/Users/kjartan.bjorndal.michalsen/Documents/GitHub/tcg-ident/tcgdex/data",
+  "tcgdex_data_path": "tcgdex/data",
   "allowed_set_abbreviations": [
+    "30C",
+    "ASC",
     "BLK",
+    "CRI",
     "DRI",
     "JTG",
+    "MEE",
     "MEG",
     "MEP",
     "MEW",
@@ -34,11 +38,14 @@
     "PAF",
     "PAL",
     "PAR",
+    "PBL",
     "PFL",
+    "POR",
     "PRE",
     "SCR",
     "SFA",
     "SSP",
+    "SVE",
     "SVI",
     "SVP",
     "TEF",
@@ -47,7 +54,7 @@
   ],
   "cart_criteria": {
     "1": {
-      "field": "category",
+      "field": "types",
       "values": []
     },
     "2": {

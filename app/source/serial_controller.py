@@ -27,6 +27,11 @@ CARD_DROP_WAIT    = 3.0
 SERVO_OPEN_DEFAULT  = 50
 SERVO_CLOSE_DEFAULT = 179
 
+# Time to let the servo reach its target before detaching (seconds).
+# Only a single light card is held, so no holding torque is needed —
+# every servo move is followed by a release (SREL / auto-detach).
+SERVO_SETTLE_DEFAULT = 0.6
+
 
 class SorterController:
     def __init__(self, on_status: Optional[Callable[[str], None]] = None):
@@ -110,7 +115,12 @@ class SorterController:
     def disconnect(self):
         if self._ser:
             try:
-                # Release the stepper (cuts hold current) before closing
+                # Release the stepper (cuts hold current) and detach the
+                # servo (cuts holding PWM) before closing
+                try:
+                    self._raw("SREL")
+                except Exception:
+                    pass
                 self._raw("REL")
                 self._ser.close()
             except Exception:
@@ -154,18 +164,39 @@ class SorterController:
         self._emit(f"PING: {resp}")
         return resp
 
-    def servo(self, angle: int) -> str:
+    def servo(self, angle: int, release_after: bool = True,
+              settle: float = SERVO_SETTLE_DEFAULT) -> str:
+        """Move servo to angle, then detach it (no holding torque needed).
+
+        Only a single light card is held, so after the servo reaches its
+        target we send SREL to cut PWM. Newer firmware also auto-detaches
+        ~0.8 s after SERVO — the explicit SREL keeps old + new firmware
+        behaving the same. Pass release_after=False to keep PWM on.
+        """
         resp = self._raw(f"SERVO {angle}")
         self._emit(f"SERVO {angle}: {resp}")
+        if release_after:
+            time.sleep(settle)
+            self.release_servo()
         return resp
 
-    def open_gate(self) -> str:
-        """Move servo to the open (card-drop) angle."""
-        return self.servo(self.servo_open_angle)
+    def release_servo(self) -> str:
+        """Detach the servo (cut PWM). Safe on old firmware (logs ERR)."""
+        resp = self._raw("SREL")
+        self._emit(f"SREL: {resp}")
+        return resp
 
-    def close_gate(self) -> str:
-        """Move servo to the closed (holding) angle."""
-        return self.servo(self.servo_close_angle)
+    def open_gate(self, release_after: bool = True,
+                  settle: float = SERVO_SETTLE_DEFAULT) -> str:
+        """Move servo to the open (card-drop) angle, then release it."""
+        return self.servo(self.servo_open_angle,
+                          release_after=release_after, settle=settle)
+
+    def close_gate(self, release_after: bool = True,
+                   settle: float = SERVO_SETTLE_DEFAULT) -> str:
+        """Move servo to the closed (holding) angle, then release it."""
+        return self.servo(self.servo_close_angle,
+                          release_after=release_after, settle=settle)
 
     def feed(self) -> str:
         resp = self._raw("FEED")
@@ -256,29 +287,33 @@ class SorterController:
         on_progress: Optional[Callable[[str], None]] = None,
         on_done: Optional[Callable[[str], None]] = None,
     ):
-        """Run n full sort cycles (mirrors sorter-test.py 'fullcycle' command)."""
+        """Run n full sort cycles (mirrors sorter-test.py 'fullcycle' command).
+
+        Every servo move is released (detached) after use — only a single
+        light card is held, so no holding torque is needed.
+        """
         def _run():
             self._busy = True
             try:
                 for i in range(1, n + 1):
                     if on_progress:
                         on_progress(f"Cycle {i}/{n}: servo feed…")
-                    self._raw(f"SERVO {SERVO_FEED_ANGLE}")
+                    self.servo(SERVO_FEED_ANGLE)
                     self._raw("FEED")
                     if on_progress:
                         on_progress(f"Cycle {i}/{n}: forward {FULL_CYCLE_STEPS}…")
                     self._raw(f"STEP {FULL_CYCLE_STEPS}")
                     self._wait_done()
-                    self._raw(f"SERVO {SERVO_DROP_ANGLE}")
+                    self.servo(SERVO_DROP_ANGLE)
                     time.sleep(CARD_DROP_WAIT)
 
                     if on_progress:
                         on_progress(f"Cycle {i}/{n}: backward…")
-                    self._raw(f"SERVO {SERVO_FEED_ANGLE}")
+                    self.servo(SERVO_FEED_ANGLE)
                     self._raw("FEED")
                     self._raw(f"STEP -{FULL_CYCLE_STEPS}")
                     self._wait_done()
-                    self._raw(f"SERVO {SERVO_DROP_ANGLE}")
+                    self.servo(SERVO_DROP_ANGLE)
                     time.sleep(CARD_DROP_WAIT)
 
                 if on_done:

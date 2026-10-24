@@ -19,6 +19,7 @@ from typing import Optional
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 SRC_DIR = os.path.join(APP_DIR, 'source')
+PROJECT_ROOT = os.path.abspath(os.path.join(APP_DIR, '..'))
 
 # Demo/test images — used when demo mode is active instead of the live camera
 DEMO_IMAGES = [
@@ -57,11 +58,47 @@ def _load_logo(height: int = LOGO_H) -> Optional['ImageTk.PhotoImage']:
 
 
 def _find_db() -> str:
+    # Return a project-relative path so settings stay portable across machines.
     for p in ['card_data_lookup.json',
               os.path.join(APP_DIR, '..', 'card_data_lookup.json')]:
         if os.path.exists(p):
-            return os.path.abspath(p)
+            return _relativize(os.path.abspath(p))
     return 'card_data_lookup.json'
+
+
+def _resolve_path(p: str) -> str:
+    """Resolve a settings path to an absolute path for file I/O.
+
+    Relative paths are interpreted relative to the project root
+    (repo root = parent of app/), so the app works regardless of CWD.
+    Absolute paths are returned unchanged (backwards compatible).
+    """
+    if not p or not p.strip():
+        return ''
+    p = p.strip()
+    if os.path.isabs(p):
+        return p
+    return os.path.abspath(os.path.join(PROJECT_ROOT, p))
+
+
+def _relativize(p: str) -> str:
+    """Convert an absolute path inside the project to a relative one for storage.
+
+    Paths outside the project are returned unchanged.
+    """
+    if not p or not p.strip():
+        return p
+    p = p.strip()
+    if not os.path.isabs(p):
+        return os.path.normpath(p)
+    try:
+        rel = os.path.relpath(p, PROJECT_ROOT)
+    except ValueError:
+        return p
+    # Keep it relative only if it stays inside the project (or is the project).
+    if rel == '.' or (not rel.startswith('..' + os.sep) and rel != '..'):
+        return rel
+    return p
 
 
 from serial_controller import SorterController
@@ -276,7 +313,7 @@ class App(tk.Tk):
             'port':          port_clean,
             'baud':          self._baud_v.get(),
             'cam_idx':       self._cam_idx_v.get(),
-            'db_path':       self._db_v.get(),
+            'db_path':       _relativize(self._db_v.get()),
             'servo_open':    self._servo_open_v.get(),
             'servo_close':   self._servo_close_v.get(),
             'step_size':     self._step_size_v.get(),
@@ -292,7 +329,7 @@ class App(tk.Tk):
             'scan_retries':  self._retries_v.get(),
             'crop_region':   list(self._scanner.crop_region)
                              if self._scanner.crop_region else None,
-            'tcgdex_data_path': self._tcgdex_data_v.get(),
+            'tcgdex_data_path': _relativize(self._tcgdex_data_v.get()),
             'allowed_set_abbreviations': self._scanner.allowed_abbreviations,
             'cart_criteria': {
                 str(n): {
@@ -332,6 +369,13 @@ class App(tk.Tk):
         _sv(self._baud_v,          'baud')
         _sv(self._cam_idx_v,       'cam_idx')
         _sv(self._db_v,            'db_path')
+        # Ignore a stale absolute db_path from another machine (e.g. macOS
+        # path on Linux) — fall back to the auto-detected local database.
+        # _resolve_path() handles both old absolute and new relative values.
+        if not os.path.exists(_resolve_path(self._db_v.get())):
+            fallback = _find_db()
+            if os.path.exists(_resolve_path(fallback)):
+                self._db_v.set(fallback)
         _sv(self._servo_open_v,    'servo_open')
         _sv(self._servo_close_v,   'servo_close')
         _sv(self._step_size_v,     'step_size')
@@ -369,6 +413,12 @@ class App(tk.Tk):
                 self._cart_field_v[n].set(v.get('field', 'types'))
 
         _sv(self._tcgdex_data_v, 'tcgdex_data_path')
+        if self._tcgdex_data_v.get() and not os.path.isdir(
+                _resolve_path(self._tcgdex_data_v.get())):
+            for candidate in ('tcgdex/data', os.path.join('..', 'tcgdex', 'data')):
+                if os.path.isdir(_resolve_path(candidate)):
+                    self._tcgdex_data_v.set(candidate)
+                    break
 
         # Restore the saved allowed-set-abbreviations list.  Like cart criteria,
         # we can't apply the listbox selection until the db loads, so store it.
@@ -1635,7 +1685,7 @@ class App(tk.Tk):
             # ── Database ──────────────────────────────────────────────────────
             self.after(0, lambda: self._db_status_lbl.config(
                 text='● Loading…', foreground=C_MUTED))
-            self._scanner.load_database(self._db_v.get())
+            self._scanner.load_database(_resolve_path(self._db_v.get()))
             if self._scanner.database_loaded:
                 self.after(0, lambda: self._db_status_lbl.config(
                     text='● Loaded', foreground=C_SUCCESS))
@@ -1790,16 +1840,16 @@ class App(tk.Tk):
             title='Select Card Database',
             filetypes=[('JSON files', '*.json'), ('All files', '*.*')])
         if path:
-            self._db_v.set(path)
+            self._db_v.set(_relativize(path))
 
     def _browse_tcgdex(self):
         """Open a folder-chooser for the tcgdex data/ directory."""
         folder = filedialog.askdirectory(
             title='Select tcgdex data/ folder',
-            initialdir=self._tcgdex_data_v.get(),
+            initialdir=_resolve_path(self._tcgdex_data_v.get()),
         )
         if folder:
-            self._tcgdex_data_v.set(folder)
+            self._tcgdex_data_v.set(_relativize(folder))
 
     def _build_card_db(self):
         """Build card_data_lookup.json from the selected tcgdex folder.
@@ -1808,8 +1858,8 @@ class App(tk.Tk):
         responsive during the (potentially slow) file walk.  Progress
         messages are fed into the build status label via self.after(0, …).
         """
-        input_folder = self._tcgdex_data_v.get().strip()
-        output_path  = self._db_v.get().strip()
+        input_folder = _resolve_path(self._tcgdex_data_v.get().strip())
+        output_path  = _resolve_path(self._db_v.get().strip())
 
         if not input_folder:
             self._build_status_lbl.config(
@@ -1902,7 +1952,7 @@ class App(tk.Tk):
 
     def _load_db(self):
         self._db_status_lbl.config(text='● Loading…', foreground=C_MUTED)
-        self._scanner.load_database(self._db_v.get())
+        self._scanner.load_database(_resolve_path(self._db_v.get()))
 
         def _check():
             if self._scanner.database_loaded:

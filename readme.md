@@ -90,6 +90,71 @@ CH340/Arduino enumerating as `ttyUSB0`, check nothing else holds it with
 `sudo lsof /dev/ttyUSB0`, and on Ubuntu disable ModemManager grabbing it with
 `sudo systemctl disable --now ModemManager`.
 
+### Firmware upload (`arduino-cli`)
+
+The Arduino runs the firmware in `sorter/sorter.ino`. Re-upload it whenever
+the `.ino` file changes. The servo is detached (PWM off) after every move,
+so the firmware must support the `SREL` command — old firmware replies
+`ERR unknown command` to `SREL` and keeps the servo powered.
+
+1. Install `arduino-cli` (no sudo needed — installs to `~/.local/bin`):
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR=~/.local/bin sh
+   export PATH="$HOME/.local/bin:$PATH"
+   arduino-cli version
+   ```
+
+2. Install the AVR core and the Servo library (once per machine):
+
+   ```bash
+   arduino-cli core update-index
+   arduino-cli core install arduino:avr
+   arduino-cli lib install Servo
+   ```
+
+3. Find the port and board (`arduino-cli board list`). The FQBN below is for
+   an Uno — use `arduino:avr:nano` or `arduino:avr:mega` if that is what you
+   have:
+
+   ```bash
+   arduino-cli board list
+   # Port         Protocol Type              Board Name FQBN Core
+   # /dev/ttyUSB0 serial   Serial Port (USB) Unknown
+   ```
+
+4. Compile (from the repo root):
+
+   ```bash
+   arduino-cli compile --fqbn arduino:avr:uno sorter
+   ```
+
+5. Upload:
+
+   ```bash
+   arduino-cli upload --fqbn arduino:avr:uno --port /dev/ttyUSB0 sorter
+   ```
+
+6. Verify the new firmware is running (`SREL → OK`; old firmware replies
+   `ERR unknown command`):
+
+   ```bash
+   python3 -c "
+   import serial, time
+   s = serial.Serial('/dev/ttyUSB0', 115200, timeout=5)
+   time.sleep(2); s.reset_input_buffer()
+   for cmd in ['PING', 'SERVO 90', 'SREL']:
+       s.write((cmd + '\n').encode())
+       print(cmd, '->', s.readline().decode(errors='replace').strip())
+       time.sleep(1.2)
+   s.close()
+   "
+   # Expected:
+   # PING -> PONG
+   # SERVO 90 -> OK
+   # SREL -> OK
+   ```
+
 ---
 
 ## Setup
@@ -197,6 +262,9 @@ app/
 
 scripts/
   build_macos.sh       PyInstaller macOS build script
+
+sorter/
+  sorter.ino           Arduino firmware — stepper + servo controller (see Firmware upload above)
 
 test-scripts/          Legacy and diagnostic scripts (see test-scripts/readme.md)
 ```
